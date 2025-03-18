@@ -1,0 +1,80 @@
+
+#!/bin/bash - 
+#===============================================================================
+#
+#          FILE: get_hg38_mappability.sh
+# 
+#         USAGE: ./get_hg38_mappability.sh
+# 
+#   DESCRIPTION: 这个脚本用于使用GEM 得到GRCh38 mappability的文件(最终文件为bed格式,mappability得分>0.3的区域)
+# 
+#       OPTIONS: ---
+#  REQUIREMENTS: hg38的参考序列(fasta格式，解压缩形式)；以及GEM的binary(下载地址:https://sourceforge.net/projects/gemlibrary/);
+#                wigToBigWig and bigWigToBedGraph and bedGraphTobed脚本(前两个下载地址
+#                https://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/)
+#                (bedGraphTobed脚本下载地址https://github.com/xuefzhao/Reference.Mappability/blob/master/Scripts/bedGraphTobed，
+#                 这个python脚本是用python2写的，改写的python3版本见文档末尾)
+#          BUGS: ---
+#         NOTES: 最终得到的bed文件区间相互有overlap，需要去除的话自己弄一下
+#        AUTHOR: 唐华韬
+#  ORGANIZATION: 
+#       CREATED: 2/12/24 18:11
+#      REVISION:  ---
+#      Reference: https://www.biostars.org/p/181014/;https://evodify.com/gem-mappability/
+#===============================================================================
+set -o nounset                              # Treat unset variables as an error
+
+#设置环境变量
+ref=/data1/liyi/zhaoyue/human_sequences/hg38.fa #参考序列的文件路径
+thr=100 #希望使用的线程数
+idx=/data1/liyi/zhaoyue/human_sequences/hg38.fa_gemindex.gem #生成的参考序列的索引文件的文件路径
+mappability=/data1/liyi/zhaoyue/human_sequences/GRCh38_mappability_100mer.gem #最终文件的文件路径的前缀
+
+
+#Create the index of the genome 生成.gem文件
+gem-indexer -T ${thr} -i ${ref} 
+
+#generate the mappability data(100 mer) 生成.mappability文件和.sizes文件
+gem-mappability -T ${thr} -I $idx -l 100 -o $mappability
+
+#Convert GEM mappability to BED
+#1).mappability to .wig
+gem-2-wig -I $idx -i $mappability.mappability -o $mappability
+#2).wig to .bigwig(.bw) 20min
+wigToBigWig $mappability.wig $mappability.sizes $mappability.bw
+#3).bw to .bedGraph
+bigWigToBedGraph  $mappability.bw $mappability.bedGraph
+#4).bedGraph to bed
+bedGraphTobed $mappability.bedGraph $mappability.bed 0.3
+#上面最终得到的bed相互是有overlapping的，需要去除的话自己弄一下
+#我是在R里用reduce()弄的
+
+#Python3版本的bedGraphTobed脚本
+'''
+#!/usr/bin/env python
+
+#!Python
+#Usage:
+#bedGraphTobed in.bedGraph out.bed MapQualCff
+#DRT stands for DNA replicating timing
+#option:
+#For debug use only
+#command='bedGraphTobed hg38.50mer.bedGraph hg38.50mer.bed 0.2'
+#sys.argv=command.split()
+
+import os
+import sys
+
+if not len(sys.argv) == 4:
+    print('usage: bedGraphTobed in.bedGraph out.bed MapQualCff')
+else:
+    filein = sys.argv[1]
+    fileout = sys.argv[2]
+    cutoff = float(sys.argv[3])
+    with open(filein) as fin, open(fileout, 'w') as fo:
+        for line in fin:
+            pin = line.strip().split()
+            if float(pin[-1]) > cutoff:
+                print(' '.join(pin[:3]), file=fo)
+
+

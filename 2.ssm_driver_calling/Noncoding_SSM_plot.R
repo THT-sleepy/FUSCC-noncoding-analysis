@@ -1,19 +1,37 @@
 #Noncoding ssm 部分绘图
 
 ##1导入包和文件路径和自写函数
+#install packages
+if(0){
+Biocductor_packages <- c("qqman","dplyr","ggplot2",
+                         "gt","gtExtras","htmltools",
+                         "data.table","ggrepel","clusterProfiler",
+                         "org.Hs.eg.db","writexl"
+)
+options(BioC_mirror="https://mirrors.westlake.edu.cn/bioconductor")
+for (pkg in Biocductor_packages){
+  if (! require(pkg,character.only=T) ) {
+    BiocManager::install(pkg,ask = F,update = F)
+    require(pkg,character.only=T) 
+  }
+}
+for (pkg in c(Biocductor_packages)){
+  require(pkg,character.only=T) 
+}}
 #包
 if(1){
-library(qqman)
-library(dplyr)
-library(ggplot2)
-library(gt)
-library(htmltools)
-library(data.table)
-library(ggrepel)
-library(clusterProfiler)
-library(org.Hs.eg.db) #人类基因组注释包
-library(writexl)
-draw_expr_cnnormal <- function(gene,mutated_samples,nc_rownames,nc_hugosymbol,cnvfile){
+  library(qqman)
+  library(dplyr)
+  library(ggplot2)
+  library(gt)
+  library(gtExtras)
+  library(htmltools)
+  library(data.table)
+  library(ggrepel)
+  library(clusterProfiler)
+  library(org.Hs.eg.db) #人类基因组注释包
+  library(writexl)
+  draw_expr_cnnormal <- function(gene,mutated_samples,nc_rownames,nc_hugosymbol,cnvfile){
     #所有的比较限于cnnormal的样本中
     #基因需要在cnv文件中有才行
     if(gene %in% rownames(cnvfile)){
@@ -79,135 +97,148 @@ draw_expr_cnnormal <- function(gene,mutated_samples,nc_rownames,nc_hugosymbol,cn
 }
 #文件路径
 if(1){
-folder_path <- "/home/data/t190513/1000_noncoding/figures_SSM/"
-enpm_result_filepath <- "/home/data/t190513/1000_noncoding/nc_point_mutations/enpm_output.tsv"
-normalized_counts_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/counts_1000_log2tpmplus1.txt"
-cnv_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/all_data_by_genes.txt"
-config_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/wgs_samples_986.txt"
-mutspot_snv_tad_filepath <- "/home/data/t190513/1000_noncoding/mutspot/MutSpot/snv_tad.txt"
-mutspot_indel_tad_filepath <- "/home/data/t190513/1000_noncoding/mutspot/MutSpot/indel_tad.txt"
-adw_result_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/adw_results_jiaoji_2025_0119.txt"
+  folder_path <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/SSM图片，第二次组会前/"
+  enpm_result_filepath <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/1-1 高频非编码点突变分析/enpm_output.tsv"
+  normalized_counts_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/counts_1000_log2tpmplus1.txt"
+  cnv_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/all_data_by_genes.txt"
+  config_filepath <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/源文件/wgs_samples_986.txt"
+  mutspot_snv_tad_filepath <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/1-1 高频非编码点突变分析/snv_tad.txt"
+  mutspot_indel_tad_filepath <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/1-1 高频非编码点突变分析/indel_tad.txt"
+  adw_result_filepath <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/1-1 高频非编码点突变分析/adw_results_jiaoji_2025_0119.txt"
 }
 #文件预处理
 if(1){
-#a 得到config文件
-config <- read.delim(config_filepath,header = F)
-config$V1 <- sapply(config$V1, function(x) {str_remove(x, "(LC).*")})
-
-#b 得到归一化后的counts
-normalized_counts <- fread(normalized_counts_filepath,data.table = F)
-#fread不支持行名处理一下
-rownames(normalized_counts) <- normalized_counts$V1
-normalized_counts$V1 <- NULL
-#只留下config有的样本Tumor的列
-mid <- paste0(config$V1,"_T")
-pattern <- paste(mid,collapse = "|")
-normalized_counts <- normalized_counts[,grepl(pattern,colnames(normalized_counts))]
-#保留三位小数
-#normalized_counts <- as.data.frame(lapply(normalized_counts, round, 3))
-#改一下列名
-colnames(normalized_counts) <- sapply(colnames(normalized_counts),function(x) paste0(strsplit(x,"_")[[1]][3],strsplit(x,"_")[[1]][2]))
-nc_rownames <- rownames(normalized_counts)
-nc_hugosymbol <- sapply(nc_rownames ,function(x) strsplit(x,"\\|")[[1]][2])
-#c 拷贝数结果
-cnv <- fread(cnv_filepath,data.table = F) #里面的值是log2(CN)-1
-rownames(cnv) <- cnv$`Gene Symbol`
-cnv[,1:3] <- NULL
+  #a 得到config文件
+  config <- read.delim(config_filepath,header = F)
+  config$V1 <- sapply(config$V1, function(x) {str_remove(x, "(LC).*")})
+  
+  #b 得到归一化后的counts
+  normalized_counts <- fread(normalized_counts_filepath,data.table = F)
+  #fread不支持行名处理一下
+  rownames(normalized_counts) <- normalized_counts$V1
+  normalized_counts$V1 <- NULL
+  #只留下config有的样本Tumor的列
+  mid <- paste0(config$V1,"_T")
+  pattern <- paste(mid,collapse = "|")
+  normalized_counts <- normalized_counts[,grepl(pattern,colnames(normalized_counts))]
+  #保留三位小数
+  #normalized_counts <- as.data.frame(lapply(normalized_counts, round, 3))
+  #改一下列名
+  colnames(normalized_counts) <- sapply(colnames(normalized_counts),function(x) paste0(strsplit(x,"_")[[1]][3],strsplit(x,"_")[[1]][2]))
+  nc_rownames <- rownames(normalized_counts)
+  nc_hugosymbol <- sapply(nc_rownames ,function(x) strsplit(x,"\\|")[[1]][2])
+  #c 拷贝数结果
+  cnv <- fread(cnv_filepath,data.table = F) #里面的值是log2(CN)-1
+  rownames(cnv) <- cnv$`Gene Symbol`
+  cnv[,1:3] <- NULL
 }
 
 ##2绘图
 #2-1 enpm
 enpm_result <- read.delim(enpm_result_filepath)
-#保存成xls
-a <- enpm_result %>%
-  filter(!is.na(raw_expr_p))
-filename <- "/home/data/t190513/1000_noncoding/nc_point_mutations/enpm_output.xlsx"
-write_xlsx(a,path=filename)
+if(0){
+  #保存成xls
+  a <- enpm_result %>%
+    filter(!is.na(raw_expr_p))
+  filename <- "/home/data/t190513/1000_noncoding/nc_point_mutations/enpm_output.xlsx"
+  write_xlsx(a,path=filename)
+} #xlsx在enpm脚本中完成了
 #2-1-2 高频突变的情况
 #2-1-2-1 高频突变表格
-html <- enpm_result %>%
+my_theme <- function(data) {
+  tab_options(
+    data = data,
+    heading.title.font.size = 16,
+    heading.align = "left",
+    table.font.size = 12
+  )
+}
+gt_tab <- enpm_result %>%
   mutate(`Location(hg38)`=Location) %>%
   arrange(desc(mut.n)) %>%
-  filter(mut.n >11 & !is.na(raw_expr_p)) %>%
+  filter(mut.n >11 & !is.na(raw_expr_p) & Type!="Others") %>%
   filter(Mappable==T & IR == F) %>%
-  dplyr::select(`Location(hg38)`,Type,mut.n,Target_Gene,raw_expr_p,raw_expr_q,raw_expr_log2fc,cnnormal_expr_p,cnnormal_expr_q,cnnormal_expr_log2fc) %>% 
+  mutate(`raw_expr_q(c)`=candidates_raw_expr_q,`cn_expr_q(c)`=candidates_cnnormal_expr_q,cn_expr_log2fc=cnnormal_expr_log2fc,cn_expr_p=cnnormal_expr_p) %>%
+  dplyr::select(`Location(hg38)`,Type,mut.n,Target_Gene,raw_expr_p,`raw_expr_q(c)`,raw_expr_log2fc,cn_expr_p,`cn_expr_q(c)`,cn_expr_log2fc) %>% 
   gt() %>% 
-  fmt_number(columns = raw_expr_p:cnnormal_expr_log2fc, n_sigfig= 3) %>%
+  fmt_number(columns = raw_expr_p:cn_expr_log2fc, n_sigfig= 3) %>%
   gt_theme_espn() %>% 
-  gt_hulk_col_numeric(c(raw_expr_p,raw_expr_q, cnnormal_expr_p,cnnormal_expr_q)) %>%
-  tab_header(title = "Recurrent Point Mutations")
-filepath <- file.path(folder_path,"Recurrent_Point_Mutations.html")
-save_html(html,file =filepath )
+  gt_hulk_col_numeric(c(raw_expr_p,`raw_expr_q(c)`, cn_expr_p,`cn_expr_q(c)`)) %>%
+  tab_header(title = "Recurrent Point Mutations") %>%
+  my_theme()
+filepath <- file.path(folder_path,"Recurrent_Point_Mutations.png")
+#save_html(html,file =filepath )
+gt_tab |> gtsave(filepath,expand = 10)#,vwidth = 16000, vheight = 9000,
 #2-1-2-1 高频突变靶基因富集分析
 if(1){
-#2-1-2-1-1 得到基因集
-df <- enpm_result %>%
-  filter(!is.na(raw_expr_p)) %>%
-  filter(Mappable==T & IR == F)
-gene_set <- df$Target_Gene
-#因为里面既有SYMBOL又有ENSG，需要拆开来转换再合并起来
-gene_set_symbol <- gene_set[!str_detect(gene_set,"ENSG")]
-gene_set_ensembl <- gene_set[str_detect(gene_set,"ENSG")]
-gene_set_trans1 <- bitr(geneID = gene_set_symbol,  #感兴趣的基因集
-                      fromType="SYMBOL",   #输入ID的类型
-                      toType=c("ENTREZID"),   #输出ID的类型，可为多个
-                      OrgDb="org.Hs.eg.db")  #物种注释数据库
-#这里的ENSEMBLE的几个基因还没办法转换，可能太新了
-if(0){
-gene_set_trans2 <- bitr(geneID = gene_set_ensembl,  #感兴趣的基因集
-                        fromType= "ENSEMBL",   #输入ID的类型
-                        toType=c("ENTREZID"),   #输出ID的类型，可为多个
-                        OrgDb="org.Hs.eg.db")  #物种注释数据库 
-}
-#2-1-2-1-2 GO富集分析
-BP <- enrichGO(gene = gene_set_symbol,  #基因列表(转换的ID)
-               keyType = "SYMBOL",  #指定的基因ID类型，默认为ENTREZID
-               OrgDb=org.Hs.eg.db,  #物种对应的org包
-               ont = "BP",   #CC细胞组件，MF分子功能，BP生物学过程
-               pvalueCutoff = 0.01,  #p值阈值
-               pAdjustMethod = "fdr",  #多重假设检验校正方式
-               minGSSize = 1,   #注释的最小基因集，默认为10
-               maxGSSize = 500,  #注释的最大基因集，默认为500
-               qvalueCutoff = 0.01,  #q值阈值
-               readable = TRUE)  #基因ID转换为基因名
-df <- BP@result
-df1 <- df %>%
-  mutate(`-log10(q)`=-log10(qvalue)) %>%
-  arrange(desc(`-log10(q)`)) %>%
-  filter(qvalue < 0.1) %>%
-  head(20)
-df1$Description <- factor(df1$Description,levels = rev(df1$Description))
-filename <- file.path(folder_path,"enpm_GO.pdf")
-pdf(filename,width = 8,height = 6)
-ggplot(df1,aes(x=`-log10(q)`,y=Description))+
-  geom_bar(stat = "identity",fill="darkorange")+
-  theme_bw()+
-  labs(y="",x="-log10(FDR)")
-dev.off()
-#2-1-2-1-3 KEGG富集分析
-KEGG <- enrichKEGG(gene = gene_set_trans1$ENTREZID,   #基因列表(同GO) 
-                   organism = "hsa",  #物种
-                   keyType = "kegg",  #指定的基因ID类型，默认为kegg
-                   minGSSize = 1, 
-                   maxGSSize = 500,
-                   pvalueCutoff = 0.01,  
-                   pAdjustMethod = "fdr",
-                   qvalueCutoff = 0.01)
-#绘制柱状图 主要反应p或q
-df <- KEGG@result
-df1 <- df %>%
-  mutate(`-log10(q)`=-log10(qvalue)) %>%
-  arrange(desc(`-log10(q)`)) %>%
-  filter(qvalue < 0.1) %>%
-  head(20)
-df1$Description <- factor(df1$Description,levels = rev(df1$Description))
-filename <- file.path(folder_path,"enpm_KEGG.pdf")
-pdf(filename,width = 8,height = 6)
-ggplot(df1,aes(x=`-log10(q)`,y=Description))+
-  geom_bar(stat = "identity",fill="darkorange")+
-  theme_bw()+
-  labs(y="",x="-log10(FDR)")
-dev.off()
+  #2-1-2-1-1 得到基因集
+  df <- enpm_result %>%
+    filter(!is.na(raw_expr_p)) %>%
+    filter(Mappable==T & IR == F)
+  gene_set <- df$Target_Gene
+  #因为里面既有SYMBOL又有ENSG，需要拆开来转换再合并起来
+  gene_set_symbol <- gene_set[!str_detect(gene_set,"ENSG")]
+  gene_set_ensembl <- gene_set[str_detect(gene_set,"ENSG")]
+  gene_set_trans1 <- bitr(geneID = gene_set_symbol,  #感兴趣的基因集
+                          fromType="SYMBOL",   #输入ID的类型
+                          toType=c("ENTREZID"),   #输出ID的类型，可为多个
+                          OrgDb="org.Hs.eg.db")  #物种注释数据库
+  #这里的ENSEMBLE的几个基因还没办法转换，可能太新了
+  if(0){
+    gene_set_trans2 <- bitr(geneID = gene_set_ensembl,  #感兴趣的基因集
+                            fromType= "ENSEMBL",   #输入ID的类型
+                            toType=c("ENTREZID"),   #输出ID的类型，可为多个
+                            OrgDb="org.Hs.eg.db")  #物种注释数据库 
+  }
+  #2-1-2-1-2 GO富集分析
+  BP <- enrichGO(gene = gene_set_symbol,  #基因列表(转换的ID)
+                 keyType = "SYMBOL",  #指定的基因ID类型，默认为ENTREZID
+                 OrgDb=org.Hs.eg.db,  #物种对应的org包
+                 ont = "BP",   #CC细胞组件，MF分子功能，BP生物学过程
+                 pvalueCutoff = 0.01,  #p值阈值
+                 pAdjustMethod = "fdr",  #多重假设检验校正方式
+                 minGSSize = 1,   #注释的最小基因集，默认为10
+                 maxGSSize = 500,  #注释的最大基因集，默认为500
+                 qvalueCutoff = 0.01,  #q值阈值
+                 readable = TRUE)  #基因ID转换为基因名
+  df <- BP@result
+  df1 <- df %>%
+    mutate(`-log10(q)`=-log10(qvalue)) %>%
+    arrange(desc(`-log10(q)`)) %>%
+    filter(qvalue < 0.1) %>%
+    head(20)
+  df1$Description <- factor(df1$Description,levels = rev(df1$Description))
+  filename <- file.path(folder_path,"enpm_GO.pdf")
+  pdf(filename,width = 8,height = 6)
+  ggplot(df1,aes(x=`-log10(q)`,y=Description))+
+    geom_bar(stat = "identity",fill="darkorange")+
+    theme_bw()+
+    labs(y="",x="-log10(FDR)")
+  dev.off()
+  #2-1-2-1-3 KEGG富集分析
+  KEGG <- enrichKEGG(gene = gene_set_trans1$ENTREZID,   #基因列表(同GO) 
+                     organism = "hsa",  #物种
+                     keyType = "kegg",  #指定的基因ID类型，默认为kegg
+                     minGSSize = 1, 
+                     maxGSSize = 500,
+                     pvalueCutoff = 0.01,  
+                     pAdjustMethod = "fdr",
+                     qvalueCutoff = 0.01)
+  #绘制柱状图 主要反应p或q
+  df <- KEGG@result
+  df1 <- df %>%
+    mutate(`-log10(q)`=-log10(qvalue)) %>%
+    arrange(desc(`-log10(q)`)) %>%
+    filter(qvalue < 0.1) %>%
+    head(20)
+  df1$Description <- factor(df1$Description,levels = rev(df1$Description))
+  filename <- file.path(folder_path,"enpm_KEGG.pdf")
+  pdf(filename,width = 8,height = 6)
+  ggplot(df1,aes(x=`-log10(q)`,y=Description))+
+    geom_bar(stat = "identity",fill="darkorange")+
+    theme_bw()+
+    labs(y="",x="-log10(FDR)")
+  dev.off()
 }
 #2-1-3 按照cnnormal_p进行排序
 #这里不存在cnnormal_p为NA而raw_p<0.05的情况，所以不用按raw_p排序画
@@ -239,125 +270,150 @@ dev.off()
 #2-2-1-1-1 snv hotspot
 mutspot_snv_tad <- read.delim(mutspot_snv_tad_filepath)
 #保存成xlsx文件
-filename <- "/home/data/t190513/1000_noncoding/mutspot/MutSpot/snv_tad.xlsx"
+filename <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/1-1 高频非编码点突变分析/snv_tad.xlsx"
 mutspot_snv_tad %>% 
   filter(!is.na(raw_expr_p)) %>%
   dplyr::select(-id,hotspot,everything()) %>%
   write_xlsx(path = filename)
 #绘制表格
-html <- mutspot_snv_tad %>%
+my_theme <- function(data) {
+  tab_options(
+    data = data,
+    heading.title.font.size = 16,
+    heading.align = "left",
+    table.font.size = 12
+  )
+}
+gt_tbl <- mutspot_snv_tad %>%
   mutate(chrstart=paste(chrom,start,sep = ":")) %>%
   mutate(Location=paste(chrstart,end,sep = "-")) %>%
   mutate(fdr_q=fdr) %>%
   mutate(mut.n=k) %>%
   mutate(raw_expr_q=raw_expr_allgene_q) %>%
-  mutate(cnnormal_expr_q=cnnormal_expr_allgene_q) %>% 
+  mutate(`cn_expr_q(c)`=candidates_cnnormal_expr_q) %>% 
+  mutate(`raw_expr_q(c)`=candidates_raw_expr_q) %>%
+  mutate(cn_expr_p=cnnormal_expr_p) %>%
+  mutate(cn_expr_log2FC=cnnormal_expr_log2FC) %>%
   filter(!is.na(raw_expr_p) & type!="Others" & mut.n >12) %>%
   filter(Mapratio_overhalf==T,Apobecratio_lesshalf==T,IRratio_overhalf==F) %>%
-  dplyr::select(Location,mut.n,fdr_q,type,target_gene,raw_expr_p,raw_expr_q,raw_expr_log2FC,cnnormal_expr_p,cnnormal_expr_q,cnnormal_expr_log2FC) %>%
+  dplyr::select(Location,mut.n,fdr_q,type,target_gene,raw_expr_p,`raw_expr_q(c)`,raw_expr_log2FC,cn_expr_p,`cn_expr_q(c)`,cn_expr_log2FC) %>%
   gt() %>% 
-  fmt_number(columns = raw_expr_p:cnnormal_expr_log2FC, n_sigfig= 3) %>%
+  fmt_number(columns = raw_expr_p:cn_expr_log2FC, n_sigfig= 3) %>%
   gt_theme_espn() %>% 
-  gt_hulk_col_numeric(c(raw_expr_p,raw_expr_q, cnnormal_expr_p,cnnormal_expr_q)) %>%
-  tab_header(title = "Hotspot in annotated regions")
-filepath <- file.path(folder_path,"Hotspot_in_annotated_regions.html")
-save_html(html,file =filepath )
+  gt_hulk_col_numeric(c(raw_expr_p,`raw_expr_q(c)`, cn_expr_p,`cn_expr_q(c)`)) %>%
+  tab_header(title = "Hotspot in annotated regions") %>%
+  my_theme 
+filepath <- file.path(folder_path,"Hotspot_in_annotated_regions.png")
+gt_tbl |> gtsave(filepath,expand = 10)
+#save_html(html,file =filepath )
 #2-2-1-1-2 snv hotspot 富集分析
 if(1){
-#2-2-1-1-2-1 得到基因集
-df <- mutspot_snv_tad %>%
-  filter(!is.na(raw_expr_p) & type != "Others") %>%
-  filter(IRratio_overhalf==F & Mapratio_overhalf==T & Apobecratio_lesshalf==T)
-gene_set <- df$target_gene
-#因为里面既有SYMBOL又有ENSG，需要拆开来转换再合并起来
-gene_set_symbol <- gene_set[!str_detect(gene_set,"ENSG")]
-gene_set_ensembl <- gene_set[str_detect(gene_set,"ENSG")]
-gene_set_trans1 <- bitr(geneID = gene_set_symbol,  #感兴趣的基因集
-                        fromType="SYMBOL",   #输入ID的类型
-                        toType=c("ENTREZID"),   #输出ID的类型，可为多个
-                        OrgDb="org.Hs.eg.db")  #物种注释数据库
-gene_set_trans2 <- bitr(geneID = gene_set_ensembl,  #感兴趣的基因集
+  #2-2-1-1-2-1 得到基因集
+  df <- mutspot_snv_tad %>%
+    filter(!is.na(raw_expr_p) & type != "Others") %>%
+    filter(IRratio_overhalf==F & Mapratio_overhalf==T & Apobecratio_lesshalf==T)
+  gene_set <- df$target_gene
+  #因为里面既有SYMBOL又有ENSG，需要拆开来转换再合并起来
+  gene_set_symbol <- gene_set[!str_detect(gene_set,"ENSG")]
+  gene_set_ensembl <- gene_set[str_detect(gene_set,"ENSG")]
+  gene_set_trans1 <- bitr(geneID = gene_set_symbol,  #感兴趣的基因集
+                          fromType="SYMBOL",   #输入ID的类型
+                          toType=c("ENTREZID"),   #输出ID的类型，可为多个
+                          OrgDb="org.Hs.eg.db")  #物种注释数据库
+  gene_set_trans2 <- bitr(geneID = gene_set_ensembl,  #感兴趣的基因集
                           fromType= "ENSEMBL",   #输入ID的类型
                           toType=c("ENTREZID"),   #输出ID的类型，可为多个
                           OrgDb="org.Hs.eg.db")  #物种注释数据库 
-gene_set_union <- union(gene_set_trans1$ENTREZID,gene_set_trans2$ENTREZID)
-#2-1-2-1-2 GO富集分析
-BP <- enrichGO(gene = gene_set_union,  #基因列表(转换的ID)
-               keyType = "ENTREZID",  #指定的基因ID类型，默认为ENTREZID
-               OrgDb=org.Hs.eg.db,  #物种对应的org包
-               ont = "BP",   #CC细胞组件，MF分子功能，BP生物学过程
-               pvalueCutoff = 0.01,  #p值阈值
-               pAdjustMethod = "fdr",  #多重假设检验校正方式
-               minGSSize = 1,   #注释的最小基因集，默认为10
-               maxGSSize = 500,  #注释的最大基因集，默认为500
-               qvalueCutoff = 0.01,  #q值阈值
-               readable = TRUE)  #基因ID转换为基因名
-df <- BP@result
-df1 <- df %>%
-  mutate(`-log10(q)`=-log10(qvalue)) %>%
-  arrange(desc(`-log10(q)`)) %>%
-  filter(qvalue < 0.1) %>%
-  head(20)
-df1$Description <- factor(df1$Description,levels = rev(df1$Description))
-filename <- file.path(folder_path,"mutspot_snv_GO.pdf")
-pdf(filename,width = 8,height = 6)
-ggplot(df1,aes(x=`-log10(q)`,y=Description))+
-  geom_bar(stat = "identity",fill="darkorange")+
-  theme_bw()+
-  labs(y="",x="-log10(FDR)")
-dev.off()
-#2-1-2-1-3 KEGG富集分析
-KEGG <- enrichKEGG(gene = gene_set_union,   #基因列表(同GO) 
-                   organism = "hsa",  #物种
-                   keyType = "kegg",  #指定的基因ID类型，默认为kegg
-                   minGSSize = 1, 
-                   maxGSSize = 500,
-                   pvalueCutoff = 0.01,  
-                   pAdjustMethod = "fdr",
-                   qvalueCutoff = 0.01)
-#绘制柱状图 主要反应p或q
-df <- KEGG@result
-df1 <- df %>%
-  mutate(`-log10(q)`=-log10(qvalue)) %>%
-  arrange(desc(`-log10(q)`)) %>%
-  filter(qvalue < 0.1) %>%
-  head(20)
-df1$Description <- factor(df1$Description,levels = rev(df1$Description))
-filename <- file.path(folder_path,"mutspot_snv_KEGG.pdf")
-pdf(filename,width = 8,height = 6)
-ggplot(df1,aes(x=`-log10(q)`,y=Description))+
-  geom_bar(stat = "identity",fill="darkorange")+
-  theme_bw()+
-  labs(y="",x="-log10(FDR)")
-dev.off()
+  gene_set_union <- union(gene_set_trans1$ENTREZID,gene_set_trans2$ENTREZID)
+  #2-1-2-1-2 GO富集分析
+  BP <- enrichGO(gene = gene_set_union,  #基因列表(转换的ID)
+                 keyType = "ENTREZID",  #指定的基因ID类型，默认为ENTREZID
+                 OrgDb=org.Hs.eg.db,  #物种对应的org包
+                 ont = "BP",   #CC细胞组件，MF分子功能，BP生物学过程
+                 pvalueCutoff = 0.01,  #p值阈值
+                 pAdjustMethod = "fdr",  #多重假设检验校正方式
+                 minGSSize = 1,   #注释的最小基因集，默认为10
+                 maxGSSize = 500,  #注释的最大基因集，默认为500
+                 qvalueCutoff = 0.01,  #q值阈值
+                 readable = TRUE)  #基因ID转换为基因名
+  df <- BP@result
+  df1 <- df %>%
+    mutate(`-log10(q)`=-log10(qvalue)) %>%
+    arrange(desc(`-log10(q)`)) %>%
+    filter(qvalue < 0.1) %>%
+    head(20)
+  df1$Description <- factor(df1$Description,levels = rev(df1$Description))
+  filename <- file.path(folder_path,"mutspot_snv_GO.pdf")
+  pdf(filename,width = 8,height = 6)
+  ggplot(df1,aes(x=`-log10(q)`,y=Description))+
+    geom_bar(stat = "identity",fill="darkorange")+
+    theme_bw()+
+    labs(y="",x="-log10(FDR)")
+  dev.off()
+  #2-1-2-1-3 KEGG富集分析
+  KEGG <- enrichKEGG(gene = gene_set_union,   #基因列表(同GO) 
+                     organism = "hsa",  #物种
+                     keyType = "kegg",  #指定的基因ID类型，默认为kegg
+                     minGSSize = 1, 
+                     maxGSSize = 500,
+                     pvalueCutoff = 0.01,  
+                     pAdjustMethod = "fdr",
+                     qvalueCutoff = 0.01)
+  #绘制柱状图 主要反应p或q
+  df <- KEGG@result
+  df1 <- df %>%
+    mutate(`-log10(q)`=-log10(qvalue)) %>%
+    arrange(desc(`-log10(q)`)) %>%
+    filter(qvalue < 0.1) %>%
+    head(20)
+  df1$Description <- factor(df1$Description,levels = rev(df1$Description))
+  filename <- file.path(folder_path,"mutspot_snv_KEGG.pdf")
+  pdf(filename,width = 8,height = 6)
+  ggplot(df1,aes(x=`-log10(q)`,y=Description))+
+    geom_bar(stat = "identity",fill="darkorange")+
+    theme_bw()+
+    labs(y="",x="-log10(FDR)")
+  dev.off()
 }
 
 #2-2-1-2-1 indel hotspot
 mutspot_indel_tad <- read.delim(mutspot_indel_tad_filepath)
 #保存成xlsx文件
-filename <- "/home/data/t190513/1000_noncoding/mutspot/MutSpot/indel_tad.xlsx"
+filename <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/1-1 高频非编码点突变分析/indel_tad.xlsx"
 mutspot_indel_tad %>% 
   filter(!is.na(raw_expr_p)) %>%
   dplyr::select(-id,hotspot,everything()) %>%
   write_xlsx(path = filename)
 #绘制表格
-html <- mutspot_indel_tad %>%
+my_theme <- function(data) {
+  tab_options(
+    data = data,
+    heading.title.font.size = 16,
+    heading.align = "left",
+    table.font.size = 12
+  )
+}
+gt_tbl <- mutspot_indel_tad %>%
   mutate(chrstart=paste(chrom,start,sep = ":")) %>%
   mutate(Location=paste(chrstart,end,sep = "-")) %>%
   mutate(fdr_q=fdr) %>%
   mutate(mut.n=k) %>%
-  mutate(raw_expr_q=raw_expr_allgene_q) %>%
-  mutate(cnnormal_expr_q=cnnormal_expr_allgene_q) %>% 
+  mutate(`raw_expr_q(c)`=candidates_raw_expr_q) %>%
+  mutate(`cn_expr_q(c)`=candidates_cnnormal_expr_q) %>%
+  mutate(cn_expr_log2FC=cnnormal_expr_log2FC) %>%
+  mutate(cn_expr_p=cnnormal_expr_p) %>%
   filter(!is.na(raw_expr_p) & type!="Others" & mut.n >5) %>% 
   filter(Mapratio_overhalf==T,Apobecratio_lesshalf==T,IRratio_overhalf==F) %>%
-  dplyr::select(Location,mut.n,fdr_q,type,target_gene,raw_expr_p,raw_expr_q,raw_expr_log2FC,cnnormal_expr_p,cnnormal_expr_q,cnnormal_expr_log2FC) %>%
+  dplyr::select(Location,mut.n,fdr_q,type,target_gene,raw_expr_p,`raw_expr_q(c)`,raw_expr_log2FC,cn_expr_p,`cn_expr_q(c)`,cn_expr_log2FC) %>%
   gt() %>% 
-  fmt_number(columns = raw_expr_p:cnnormal_expr_log2FC, n_sigfig= 3) %>%
+  fmt_number(columns = raw_expr_p:cn_expr_log2FC, n_sigfig= 3) %>%
   gt_theme_espn() %>% 
-  gt_hulk_col_numeric(c(raw_expr_p,raw_expr_q, cnnormal_expr_p,cnnormal_expr_q)) %>%
-  tab_header(title = "Hotspot(indel) in annotated regions")
-filepath <- file.path(folder_path,"Hotspot(indel)_in_annotated_regions.html")
-save_html(html,file =filepath )
+  gt_hulk_col_numeric(c(raw_expr_p,`raw_expr_q(c)`, cn_expr_p,`cn_expr_q(c)`)) %>%
+  tab_header(title = "Hotspot(indel) in annotated regions") %>%
+  my_theme()
+filepath <- file.path(folder_path,"Hotspot(indel)_in_annotated_regions.png")
+gt_tbl |> gtsave(filepath,expand = 10)
+#save_html(html,file =filepath )
 #2-2-1-2-2 mutspot indel 富集分析
 if(1){
   #2-2-1-2-2-1 得到基因集
@@ -373,11 +429,11 @@ if(1){
                           toType=c("ENTREZID"),   #输出ID的类型，可为多个
                           OrgDb="org.Hs.eg.db")  #物种注释数据库
   if(0){
-  gene_set_trans2 <- bitr(geneID = gene_set_ensembl,  #感兴趣的基因集
-                          fromType= "ENSEMBL",   #输入ID的类型
-                          toType=c("ENTREZID"),   #输出ID的类型，可为多个
-                          OrgDb="org.Hs.eg.db")  #物种注释数据库 
-  gene_set_union <- union(gene_set_trans1$ENTREZID,gene_set_trans2$ENTREZID)
+    gene_set_trans2 <- bitr(geneID = gene_set_ensembl,  #感兴趣的基因集
+                            fromType= "ENSEMBL",   #输入ID的类型
+                            toType=c("ENTREZID"),   #输出ID的类型，可为多个
+                            OrgDb="org.Hs.eg.db")  #物种注释数据库 
+    gene_set_union <- union(gene_set_trans1$ENTREZID,gene_set_trans2$ENTREZID)
   } #ensembl的转不了，基因太新了
   #2-2-1-2-2-1 GO富集分析
   BP <- enrichGO(gene = gene_set_trans1$ENTREZID,  #基因列表(转换的ID)
@@ -569,7 +625,7 @@ dev.off()
 #2-3 activedriverwgs
 adw_results <- read.delim(adw_result_filepath)
 #保存成xlsx文件
-filename <- "/home/data/t190513/1000_noncoding/activedriverwgs/adw_result.xlsx"
+filename <- "C:/Users/86152/Desktop/八年制卓越计划/非编码区突变在肿瘤发生发展中的作用课题/1-1 高频非编码点突变分析/adw_result.xlsx"
 adw_results %>%
   filter(!is.na(raw_expr_p)) %>%
   write_xlsx(path=filename)
@@ -586,8 +642,18 @@ ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
   geom_point()+
   theme_bw()+ #选择主题
   theme(panel.grid = element_blank())+ #去掉网格线
-  scale_color_manual(values = c("Promoter_CDS" = "darkred", "Promoter_LncRNA" = "darkblue")) +
-  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4)
+  theme(
+    axis.title.y = element_text(size = 15, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(size = 15, face = "bold"),  
+    axis.text.y = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 15,face = "bold"),
+    legend.title = element_text(size = 15,face = "bold"),
+    legend.position = c(0.2,0.9)
+  )+
+  labs(x="")+
+  scale_color_manual(values = c("Promoter_CDS" = "blue", "Promoter_LncRNA" = "orange")) +
+  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4,show.legend = F)
 dev.off()
 
 #2-3-1-2 utr
@@ -601,8 +667,18 @@ ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
   geom_point()+
   theme_bw()+ #选择主题
   theme(panel.grid = element_blank())+ #去掉网格线
-  scale_color_manual(values = c("UTR5" = "darkred", "UTR3" = "darkblue")) +
-  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4)
+  scale_color_manual(values = c("UTR5" = "blue", "UTR3" = "orange")) +
+  theme(
+    axis.title.y = element_text(size = 15, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(size = 15, face = "bold"),  
+    axis.text.y = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 15,face = "bold"),
+    legend.title = element_text(size = 15,face = "bold"),
+    legend.position = c(0.2,0.9)
+  )+
+  labs(x="")+
+  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4,show.legend = F)
 dev.off()
 #2-3-1-3 SS
 df <- adw_results %>% 
@@ -615,8 +691,18 @@ ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
   geom_point()+
   theme_bw()+ #选择主题
   theme(panel.grid = element_blank())+ #去掉网格线
-  scale_color_manual(values = c("SS_CDS" = "darkred", "SS_LncRNA" = "darkblue")) +
-  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4)
+  scale_color_manual(values = c("SS_CDS" = "blue", "SS_LncRNA" = "orange")) +
+  theme(
+    axis.title.y = element_text(size = 15, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(size = 15, face = "bold"),  
+    axis.text.y = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 15,face = "bold"),
+    legend.title = element_text(size = 15,face = "bold"),
+    legend.position = c(0.2,0.9)
+  )+
+  labs(x="")+
+  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4,show.legend = F)
 dev.off()
 #2-3-1-4 Enhancer
 df <- adw_results %>% 
@@ -629,8 +715,18 @@ ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
   geom_point()+
   theme_bw()+ #选择主题
   theme(panel.grid = element_blank())+ #去掉网格线
-  scale_color_manual(values = c("Enhancer" = "darkred")) +
-  geom_label_repel(data = df_label, aes(label = Target_gene), vjust = 1, hjust = 1,size=3)
+  scale_color_manual(values = c("Enhancer" = "blue")) +
+  theme(
+    axis.title.y = element_text(size = 15, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(size = 15, face = "bold"),  
+    axis.text.y = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 15,face = "bold"),
+    legend.title = element_text(size = 15,face = "bold"),
+    legend.position = c(0.2,0.9)
+  )+
+  labs(x="")+
+  geom_label_repel(data = df_label, aes(label = Target_gene), vjust = 0.5, hjust = 0.3,size=3,show.legend = F,max.overlaps = 100)
 dev.off()
 #2-3-1-5 LncRNA
 df <- adw_results %>% 
@@ -643,8 +739,18 @@ ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
   geom_point()+
   theme_bw()+ #选择主题
   theme(panel.grid = element_blank())+ #去掉网格线
-  scale_color_manual(values = c("LncRNA" = "darkred")) +
-  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4)
+  scale_color_manual(values = c("LncRNA" = "blue")) +
+  theme(
+    axis.title.y = element_text(size = 15, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(size = 15, face = "bold"),  
+    axis.text.y = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 15,face = "bold"),
+    legend.title = element_text(size = 15,face = "bold"),
+    legend.position = c(0.2,0.9)
+  )+
+  labs(x="")+
+  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4,show.legend = F)
 dev.off()
 #2-3-1-6 miRNA
 df <- adw_results %>% 
@@ -657,25 +763,35 @@ ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
   geom_point()+
   theme_bw()+ #选择主题
   theme(panel.grid = element_blank())+ #去掉网格线
-  scale_color_manual(values = c("miRNA" = "darkred")) +
-  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4)
+  scale_color_manual(values = c("miRNA" = "blue")) +
+  theme(
+    axis.title.y = element_text(size = 15, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(size = 15, face = "bold"),  
+    axis.text.y = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 15,face = "bold"),
+    legend.title = element_text(size = 15,face = "bold"),
+    legend.position = c(0.2,0.9)
+  )+
+  labs(x="")+
+  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4,show.legend = F)
 dev.off()
 
 #2-3-1-7 smallRNA 无Post_filter_q小于 0.01者
 if(0){
-df <- adw_results %>% 
-  filter(Type %in% c("smallRNA") & Post_filter_q < 0.01) %>%
-  filter(IRratio_overhalf==F & Mapratio_overhalf==T & Apobecratio_lesshalf==T) 
-df_label <- df[df$Post_filter_q <1e-3, ]
-filename <- file.path(folder_path,"adw_smallrna.pdf")
-pdf(filename,width = 8,height = 6)
-ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
-  geom_point()+
-  theme_bw()+ #选择主题
-  theme(panel.grid = element_blank())+ #去掉网格线
-  scale_color_manual(values = c("smallRNA" = "darkred")) +
-  geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4)
-dev.off()
+  df <- adw_results %>% 
+    filter(Type %in% c("smallRNA") & Post_filter_q < 0.01) %>%
+    filter(IRratio_overhalf==F & Mapratio_overhalf==T & Apobecratio_lesshalf==T) 
+  df_label <- df[df$Post_filter_q <1e-3, ]
+  filename <- file.path(folder_path,"adw_smallrna.pdf")
+  pdf(filename,width = 8,height = 6)
+  ggplot(data = df,aes(x=element_muts_obs,y=-log10(Post_filter_q),colour = Type))+
+    geom_point()+
+    theme_bw()+ #选择主题
+    theme(panel.grid = element_blank())+ #去掉网格线
+    scale_color_manual(values = c("smallRNA" = "#FFCC99")) +
+    geom_label(data = df_label, aes(label = Target_gene), vjust = 1.5, hjust = 1,size=4)
+  dev.off()
 }
 
 #2-3-1-8 mut qqplot lambda算出来为0，不知为何
@@ -759,19 +875,34 @@ if(1){
 
 
 #2-3-2 按cnnormal_expr_p排序
-html <- adw_results %>%
+my_theme <- function(data) {
+  tab_options(
+    data = data,
+    heading.title.font.size = 16,
+    heading.align = "left",
+    table.font.size = 8
+  )
+}
+gt_tbl <- adw_results %>%
   mutate(mut.n=element_muts_obs) %>%
-  arrange(cnnormal_expr_p) %>%
-  filter(cnnormal_expr_p < 0.001,!is.na(raw_expr_p)) %>%
+  arrange(candidates_cnnormal_expr_q) %>%
+  head() %>%
   filter(Mapratio_overhalf==T,IRratio_overhalf==F,Apobecratio_lesshalf==T) %>%
-  dplyr::select(Type,mut.n,Target_gene,raw_expr_p,raw_expr_q,raw_expr_log2FC,cnnormal_expr_p,cnnormal_expr_q,cnnormal_expr_log2FC) %>% 
+  mutate(`raw_expr_q(c)`=candidates_raw_expr_q) %>%
+  mutate(`cn_expr_q(c)`=candidates_cnnormal_expr_q) %>%
+  mutate(cn_expr_p=cnnormal_expr_p) %>%
+  mutate(cn_expr_log2FC =cnnormal_expr_log2FC) %>%
+  dplyr::select(Type,mut.n,Target_gene,raw_expr_p,`raw_expr_q(c)`,raw_expr_log2FC,cn_expr_p,`cn_expr_q(c)`,cn_expr_log2FC) %>% 
   gt() %>% 
-  fmt_number(columns = raw_expr_p:cnnormal_expr_log2FC, n_sigfig= 3) %>%
+  fmt_number(columns = raw_expr_p:cn_expr_log2FC, n_sigfig= 3) %>% 
   gt_theme_espn() %>% 
-  gt_hulk_col_numeric(c(raw_expr_p,raw_expr_q, cnnormal_expr_p,cnnormal_expr_q)) %>%
-  tab_header(title = "Highly Mutated Elements Associated with Expression Change of Target Gene")
-filepath <- file.path(folder_path,"Highly_Mutated_Elements_Associated_with_Expression_Change_of_Target_Gene.html")
-save_html(html,file =filepath )
+  gt_hulk_col_numeric(c(raw_expr_p,`raw_expr_q(c)`, cn_expr_p,`cn_expr_q(c)`)) %>%
+  tab_header(title = "Highly Mutated Elements Associated with Expression Change of Target Gene") %>%
+  my_theme()
+filepath <- file.path(folder_path,"Highly_Mutated_Elements_Associated_with_Expression_Change_of_Target_Gene.png")
+gt_tbl |> gtsave(filepath,expand = 10)
+
+#save_html(html,file =filepath )
 #相应富集分析
 if(1){
   df <- adw_results %>% 
@@ -950,16 +1081,16 @@ if(1){
   
   qq(p,col = ifelse(category == "A", "blue", "green"))
   text(x = negative_log10_expected_p[1], y = negative_log10_observed_p[1], labels = labels[1], pos = 4, col = "blue")
-negative_log10_observed_p <- -log10(p)
-sorted_p <- sort(p)
-# 计算每个数据点对应的百分位
-percentiles <- sapply(p, function(x) {
-  # 获取数据在排序后数组中的位置
-  rank <- which(sorted_p == x)
-  # 计算百分位数
-  percentile <- (rank / length(sorted_p)) 
-  return(percentile)
-})
-negative_log10_expected_p <- -log10(qunif(percentiles,min = 0,max = 1))
-labels <- c("A","B","C","D")
+  negative_log10_observed_p <- -log10(p)
+  sorted_p <- sort(p)
+  # 计算每个数据点对应的百分位
+  percentiles <- sapply(p, function(x) {
+    # 获取数据在排序后数组中的位置
+    rank <- which(sorted_p == x)
+    # 计算百分位数
+    percentile <- (rank / length(sorted_p)) 
+    return(percentile)
+  })
+  negative_log10_expected_p <- -log10(qunif(percentiles,min = 0,max = 1))
+  labels <- c("A","B","C","D")
 }
