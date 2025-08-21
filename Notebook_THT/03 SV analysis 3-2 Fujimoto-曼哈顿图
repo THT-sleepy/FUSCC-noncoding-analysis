@@ -1,0 +1,123 @@
+# 绘制曼哈顿图            (What)
+
+* Aug 21, 2025                                     (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis   (Where)
+* 就模仿Fujimoto绘制一幅曼哈顿图                                                   (Why)
+
+## 绘图                                     (How)
+
+```
+########Fujimoto-曼哈顿图###########
+#纵轴是number of samples with STVs,横轴是chr坐标
+
+load("~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_table3.Rdata")
+library(qqman)
+library(ggplot2)
+library(tidyverse)
+library(data.table)
+library(ggman)
+
+##load files
+#得到癌基因list
+if(1){
+  cancer_gene_737_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/737 cancer genes by pcawg.csv"
+  lung_drivers_df_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/20220203_lung_drivers.csv"
+  cosmic_census_cancer_gene_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/Cancer Gene Census v100.tsv"
+  oncokb_drivergenes_list_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/oncokb_cancerGeneList_2024_10_24.tsv"
+  OncoKB_driver <- fread(oncokb_drivergenes_list_filepath)
+  CGC_driver <- fread(cosmic_census_cancer_gene_filepath)
+  PCAWG_driver <- fread(cancer_gene_737_filepath)
+  names(PCAWG_driver) <- "Gene_Symbol"
+  lung_driver <- fread(lung_drivers_df_filepath)
+  all_drivergenes_list <- union(OncoKB_driver$`Hugo Symbol`,CGC_driver$`Gene Symbol`)
+  all_drivergenes_list  <- union(all_drivergenes_list,PCAWG_driver$Gene_Symbol)
+  all_drivergenes_list <- union(all_drivergenes_list,lung_driver$Gene_Symbol)
+}
+
+#法二 ggplot2
+df <- fujimoto_table3[,c(1,2,4,6)]
+df <- df %>%
+  mutate(
+    CHROM = recode(CHROM,
+                   "chr1" = 1, "chr2" = 2, "chr3" = 3, "chr4" = 4, "chr5" = 5,
+                   "chr6" = 6, "chr7" = 7, "chr8" = 8, "chr9" = 9, "chr10" = 10,
+                   "chr11" = 11, "chr12" = 12, "chr13" = 13, "chr14" = 14, "chr15" = 15,
+                   "chr16" = 16, "chr17" = 17, "chr18" = 18, "chr19" = 19, "chr20" = 20,
+                   "chr21" = 21, "chr22" = 22, "chrX" = 23, "chrY" = 24)
+  ) %>%
+  mutate(id = paste0("r", row_number())) %>%
+  filter(CHROM != 24)
+df$cancer_gene <- sapply(df$gene_name, function(gene_list) {
+  genes <- unlist(strsplit(gene_list, ";"))  # 将gene_name中的基因分开
+  cancer_genes <- genes[genes %in% all_drivergenes_list]  # 筛选在all_list中的基因
+  paste(cancer_genes, collapse = ";")  # 使用；连接满足条件的基因
+})
+df$cancer_gene <- ifelse(df$unique_samples >=15 ,df$cancer_gene,"")
+df_empty <- df %>% filter(cancer_gene == "")
+
+# 其余部分进行去重，保留每个重复值的第一行
+df_non_empty <- df %>%
+  filter(cancer_gene != "") %>%
+  group_by(cancer_gene) %>%
+  slice(1) %>%
+  ungroup()
+
+# 合并空字符串行和去重后的数据
+df <- bind_rows(df_empty, df_non_empty)
+svOfInterest <- df$cancer_gene[df$unique_samples >=15 & df$cancer_gene !=""]
+don <- df %>%
+
+  # Compute chromosome size
+  group_by(CHROM) %>%
+  summarise(chr_len=max(start_pos)) %>%
+
+  # Calculate cumulative position of each chromosome
+  mutate(tot=cumsum(chr_len)-chr_len) %>%
+  select(-chr_len) %>%
+
+  # Add this info to the initial dataset
+  left_join(df, ., by=c("CHROM"="CHROM")) %>%
+
+  # Add a cumulative position of each SNP
+  arrange(CHROM, start_pos) %>%
+  mutate( start_poscum=start_pos+tot) %>%
+
+  # ！！！！！！Add highlight and annotation information
+  mutate( is_highlight=ifelse(cancer_gene %in% svOfInterest, "yes", "no")) %>%
+  mutate( is_annotate=ifelse(unique_samples>=20, "yes", "no"))
+
+axisdf = don %>% group_by(CHROM) %>% summarize(center=( max(start_poscum) + min(start_poscum) ) / 2 )
+axisdf$CHROM[23] <- "X"
+
+source("~/1000_noncoding/3.SV_analysis/2.analysis/theme_bipin.r")
+png(filename = "~/1000_noncoding/3.SV_analysis/pictures/SVs_freq_Manhatanv6(res=300,3300:1600).png",
+    res=300,width = 3300,height = 1600)
+p2_1 <- ggplot(don, aes(x=start_poscum, y=unique_samples)) +
+
+  geom_point( aes(color=as.factor(CHROM)), alpha=0.8, size=1.3) +
+  scale_color_manual(values = rep(c("grey", "#323232"),23)) +
+  scale_x_continuous( label = axisdf$CHROM, breaks= axisdf$center ) +
+  scale_y_continuous(expand = c(0, 0),limits = c(0,50) ) +     # remove space between plot area and x axis
+  theme_bipin() +
+  labs(x = "",y="number of samples\nwith SV(bin=150kbp)")+
+  #设置高亮
+  geom_point(data=subset(don, is_highlight=="yes"), color="red", size=2) +
+
+  # Add label using ggrepel to avoid overlapping
+  geom_label_repel( data=subset(don, is_annotate=="yes"), aes(label=cancer_gene), size=4,max.overlaps = Inf) +
+  theme(
+    legend.position="none",
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.title.x = element_text(size = 16, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 16, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold")
+  )
+p2_1
+dev.off()
+
+
+```
+                                                    (Result)
+The output from FASTQC and multiqc look good!  Proceeding to differential expression analysis of unicorn horn between activated and unactivated samples.

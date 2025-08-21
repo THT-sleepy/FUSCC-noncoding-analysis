@@ -1,0 +1,193 @@
+#此脚本把SV按每150kb进行统计，得到的表格用于绘制曼哈顿图   (What)
+
+* Aug 21, 2025                                  (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis (Where)
+                                                   (Why)
+就是参照Fujimoto的文章想统计下每150kb bin的断点数目，从而找出高频SV的区域.
+
+
+## 代码如下                                       (How)
+
+```
+########Fujimoto-data wash,得到Fujimoto-table1###########
+
+#note:和1中不同,这里脚本需要使用的是所有断点的POS，需要把所有突变弄成断点的形式
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_vcf_afterQC.Rdata")
+
+##loading packages and files
+library(tidyverse)
+library(GenomicRanges)
+
+gene_intervals <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/all_gene_hg38.bed4",header = F,sep = " ")
+colnames(gene_intervals) <- c("chr","start","end","gene_name")
+cytoband_intervals <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/cytoBandMapped_hg38.bed",header = F)
+colnames(cytoband_intervals) <- c("chr","start","end","cytoband","cytoband_info")
+#关于cytoband_info
+if(0){
+  #"acen"是着丝粒；
+  #"stalk"是指近端着丝粒染色体chr13、14、15、21、22的短臂；
+  #"gvar"条带往往是异染色质，无论是中心还是端粒。
+}
+
+##整理出数据框 Fujimoto-table1
+#chr #start #pos #samples_with_breakpoints #sv_ids #overlapping genes #gene_band
+
+#1首先清洗数据(还要添加注释信息?)
+if(1){
+  df <- all_vcf_data
+  #1-1 将所有突变拆成断点形式
+  #需要得到的列是chr pos sample sv_id info
+  df_split <- df %>%
+    # 使用mutate判断INFO列中是否包含END，并进行拆分
+    rowwise() %>%
+    mutate(
+      INFO_split = strsplit(INFO, ";")
+    ) %>%
+    unnest(INFO_split) %>%
+    filter(grepl("\\bEND=\\b", INFO_split)) %>%
+    mutate(
+      POS = sub("END=", "", INFO_split),
+      INFO = "END="  # 新行INFO列保持为END=xxx
+    ) %>%
+    select(CHROM, POS, INFO, SAMPLE,SV_ID) %>%
+    bind_rows(
+      df %>%
+        select(CHROM, POS, INFO, SAMPLE,SV_ID)
+    ) %>%
+    arrange(CHROM, POS)
+
+  df_split$POS <- as.numeric(df_split$POS)
+  save(df_split,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_breakpoints_afterQC.Rdata")
+  #1-2 计算每150000bp有多少个sample有断点
+  chrom_lengths <- c(
+    chr1 = 248956422, chr2 = 242193529, chr3 = 198295559, chr4 = 190214555,
+    chr5 = 181538259, chr6 = 170805979, chr7 = 159345973, chr8 = 145138636,
+    chr9 = 138394717, chr10 = 133797422, chr11 = 135086622, chr12 = 133275309,
+    chr13 = 114364328, chr14 = 107043718, chr15 = 101991189, chr16 = 90338345,
+    chr17 = 83257441, chr18 = 80373285, chr19 = 58617616, chr20 = 64444167,
+    chr21 = 46709983, chr22 = 50818468, chrX = 156040895, chrY = 57227415
+  )
+
+  # 创建每个染色体的150kb区间
+
+  create_intervals <- function(chrom, length) {
+    start_pos <- seq(1, length, by = 150000)
+    end_pos <- start_pos + 149999
+    data.frame(
+      CHROM = rep(chrom, length(start_pos)),
+      start_pos = start_pos,
+      end_pos = end_pos
+    )
+  }
+
+  # 创建所有染色体的区间
+  all_intervals <- do.call(rbind, lapply(names(chrom_lengths), function(chrom) {
+    create_intervals(chrom, chrom_lengths[[chrom]])
+  }))
+
+  # 创建 GRanges 对象表示150kb区间
+  gr_intervals <- GRanges(
+    seqnames = all_intervals$CHROM,
+    ranges = IRanges(start = all_intervals$start_pos, end = all_intervals$end_pos)
+  )
+
+  # 创建 GRanges 对象表示突变位置
+  gr_mutations <- GRanges(
+    seqnames = df_split$CHROM,
+    ranges = IRanges(start = df_split$POS, end = df_split$POS)
+  )
+
+  # 使用 findOverlaps 查找重叠的区间
+  overlaps <- findOverlaps(gr_mutations, gr_intervals)
+
+  # 提取重叠的突变和区间信息
+  overlap_data <- data.frame(
+    mutation_index = queryHits(overlaps),
+    interval_index = subjectHits(overlaps)
+  )
+
+  # 将突变和区间数据合并
+  result <- cbind(all_intervals[overlap_data$interval_index, ],df_split[overlap_data$mutation_index, ])
+  colnames(result)[4] <- "BND_CHROM"
+  result_summary <- result %>%
+    group_by(CHROM, start_pos, end_pos) %>%
+    summarise(
+      unique_samples = n_distinct(SAMPLE),
+      SV_ID_LIST = str_c(unique(SV_ID), collapse = ";"),  # 用分号连接 SV_ID
+      .groups = "drop"
+    )
+
+  result_complete1 <- all_intervals %>%
+    left_join(result_summary, by = c("CHROM", "start_pos", "end_pos")) %>%
+    mutate(unique_samples = if_else(is.na(unique_samples), 0, unique_samples))
+
+  #colnames(result_complete1) <- c("chr","start","end","n_samples_with_bnd","sv_id_list")
+
+  ##添加上注释信息 overlap_genes
+  gr_genes <- GRanges(
+    seqnames = gene_intervals$chr,
+    ranges = IRanges(start = gene_intervals$start+1, end = gene_intervals$end)
+  )
+  hits_interval_gene <- findOverlaps(gr_intervals,gr_genes)
+  overlap_data <- data.frame(
+    interval_index = queryHits(hits_interval_gene),
+    gene_index = subjectHits(hits_interval_gene)
+  )
+
+  result <- cbind(all_intervals[overlap_data$interval_index,],gene_intervals[overlap_data$gene_index,])
+  result <- result[,c(1,2,3,7)]
+  result <- result %>%
+    group_by(across(1:3)) %>%  # 按前三列分组
+    summarize(gene_name = paste(unique(gene_name), collapse = ";"), .groups = "drop")
+  result_complete2 <- all_intervals %>%
+    left_join(result, by = c("CHROM", "start_pos", "end_pos"))
+
+  ##添加注释信息 cytoband
+  gr_bands <- GRanges(
+    seqnames = cytoband_intervals$chr,
+    ranges = IRanges(start = cytoband_intervals$start+1, end = cytoband_intervals$end)
+  )
+  hits_interval_band <- findOverlaps(gr_intervals,gr_bands)
+  overlap_data <- data.frame(
+    interval_index = queryHits(hits_interval_band),
+    band_index = subjectHits(hits_interval_band)
+  )
+
+  result <- cbind(all_intervals[overlap_data$interval_index,],cytoband_intervals[overlap_data$band_index,])
+  result <- result[,c(1,2,3,7,8)]
+  result <- result %>%
+    group_by(across(1:3)) %>%  # 按前三列分组
+    summarize(cytoband = paste(unique(cytoband), collapse = ";"),
+              cytoband_info = paste(cytoband_info, collapse = ";"),
+              .groups = "drop")
+  result_complete3 <- all_intervals %>%
+    left_join(result, by = c("CHROM", "start_pos", "end_pos"))
+
+  fujimoto_table3 <- result_complete1 %>%
+    left_join(result_complete2,by=c("CHROM", "start_pos", "end_pos")) %>%
+    left_join(result_complete3,by=c("CHROM", "start_pos", "end_pos"))
+  save(fujimoto_table3,file = "~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_table3.Rdata")
+}
+```
+得到的表格长这样(Result)
+
+CHROM start_pos end_pos unique_samples                            SV_ID_LIST
+chr1         1  150000              0                                  <NA>
+chr1    150001  300000              2 3796LC:MantaBND:14;6185LC:MantaBND:31
+chr1    300001  450000              0                                  <NA>
+chr1    450001  600000              0                                  <NA>
+chr1    600001  750000              0                                  <NA>
+chr1    750001  900000              1                 3973LC:MantaBND:99388
+                                                                                                                                                                                             gene_name
+              DDX11L2;DDX11L1;WASH7P;MIR1302-2HG;FAM138A;OR4G4P;ENSG00000290826;OR4G11P;OR4F5;ENSG00000238009;ENSG00000239945;CICP27;ENSG00000268903;ENSG00000269981;ENSG00000239906;ENSG00000241860
+                                                                                                     ENSG00000241860;ENSG00000241599;DDX11L17;WASH9P;ENSG00000292994;ENSG00000228463;ENSG00000286448
+                                                                                                                                  ENSG00000292994;RPL23AP24;ENSG00000236601;ENSG00000290385;WBP1LP7
+                                                                                                       ENSG00000290385;OR4F29;ENSG00000237094;CICP7;ENSG00000250575;ENSG00000293331;ENSG00000235146                                                               ENSG00000293331;MTND1P23;MTND2P28;MTCO1P12;MTCO2P12;MTATP8P1;MTATP6P1;MTCO3P12;WBP1LP6;OR4F16;ENSG00000230021;CICP3;ENSG00000291215
+ENSG00000293331;ENSG00000291215;ENSG00000229905;ENSG00000228327;LINC01409;ENSG00000285268;ENSG00000290784;ENSG00000230092;FAM87B;LINC00115;LINC01128;ENSG00000288531;FAM41C;TUBB8P11;ENSG00000283040
+  cytoband cytoband_info
+p36.33          gneg
+p36.33          gneg
+p36.33          gneg
+p36.33          gneg
+p36.33          gneg
+p36.33          gneg
