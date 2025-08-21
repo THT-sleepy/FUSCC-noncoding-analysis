@@ -12,7 +12,7 @@
 
 
 ##分两步来
-##step1 挑出来>=15(2%) 个样本在上下游500kb/300kb/100kb有断点的gene
+##step1 挑出来>=15(2%) 个样本在上下游500kb有断点的gene
 ##step2 比较这些gene有突变和没突变表达的差异(fc和p),有突变者和无突变者的CN,矫正CN后的差异;质控(去掉不表达的gene等)
 
 ##loading packages
@@ -23,10 +23,8 @@ library(doParallel)
 
 load("~/1000_noncoding/3.SV_analysis/2.analysis/config_986.Rdata")
 ##loading files
-gene_intervals <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/all_gene_hg38.bed4",
-                             header = F,
-                             sep = " ")
-colnames(gene_intervals) <- c("chr","start","end","gene_name")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/ensembl_canonical_transcripts_bed4.Rdata")
+gene_intervals <- ensembl_canonical_transcripts_bed4
 #得到癌基因list
 if(1){
   cancer_gene_737_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/737 cancer genes by pcawg.csv"
@@ -87,7 +85,6 @@ load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_breakpoints_afterQC.Rdata"
 
 ##step1 #将gene的上下游500kb与断点overlap
 if(1){
-
   #得到gene_flanking
   if(1){
     # 创建一个空的数据框来存储新的区间
@@ -199,7 +196,7 @@ p_expr_cnnormal <- function(target_gene,df,expr_rownames,expr_hugosymbol){
     filter(gene_name==target_gene) %>%
     select(SAMPLE)
   mutated_samples <- unique(mutated_samples$SAMPLE)
-  cn_samples <- names(cnv_1)[cnv_1[target_gene, ] >= log2(1/2) & cnv_1[target_gene, ] <= log2(3)]
+  cn_samples <- names(cnv_1)[cnv_1[target_gene, ] > log2(1/2) & cnv_1[target_gene, ] < log2(4)]
   #cn_samples <- names(cnv_1)[cnv_1[target_gene, ] %in% c(-1,0,1)]
   cn_mutated_samples <- intersect(cn_samples,mutated_samples)
   cn_unmutated_samples <- setdiff(cn_samples,mutated_samples)
@@ -287,8 +284,6 @@ oncokb <- OncoKB_driver
 cgc <- CGC_driver
 
 save(fujimoto_table4,file="~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_table4.Rdata")
-
-
 ```
                                                     (Result)
 The output from FASTQC and multiqc look good!  Proceeding to differential expression analysis of unicorn horn between activated and unactivated samples.
