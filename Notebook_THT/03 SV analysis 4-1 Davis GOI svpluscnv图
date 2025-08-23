@@ -1,0 +1,370 @@
+# 对可能的增强子劫持靶基因绘制svpluscnv图             (What)
+
+* Aug 23, 2025                                     (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
+* 这个图可以详细反映基因的sv和cnv                  (Why)
+
+
+## 代码                                         (How)
+
+```
+##安装包
+#需要先手动装一个tarfix包，这个包被cran移除了不能直接下，需要下载源代码包
+##loading packages
+library(svpluscnv)
+library(GenomicRanges)
+library(data.table)
+library(plot3D)
+library(dplyr)
+
+setwd("~/1000_noncoding/3.SV_analysis/")
+
+##给绘图函数修改一下
+##修改一下svpluscnv的绘图函数
+#添加选项1 seg.color 默认为NULL，三个颜色组成的向量(如seg.color = c("#626DA5","white","#D3544E"))，定义segments的渐变色调
+#添加选项2 sv.label TRUE/FALSE默认为TRUE添加sv的标记
+#添加选项3 axis.label TRUE/FALSE默认为TRUE添加下方的坐标轴
+#添加选项4 seg.sep segment之间间隔调整参数，0为无间隔
+sv.model.view.modified <- function(cnv, svc, chrom, start, stop,
+                                   sampleids=NULL,
+                                   cnvlim=c(-2,2),
+                                   addlegend='both',
+                                   cex.legend=1,
+                                   interval=NULL,
+                                   addtext=NULL,
+                                   cex.text=.8,
+                                   plot=TRUE,
+                                   summary=TRUE,
+                                   seg.color=NULL,
+                                   sv.label=TRUE,
+                                   axis.label=TRUE,
+                                   seg.sep=0,
+                                   ...){
+
+
+  stopifnot(!is.null(chrom) && !is.null(start) && !is.null(stop))
+
+  stopifnot(cnv@type == "cnv")
+  cnvdat <- cnv@data
+
+  stopifnot(svc@type == "svc")
+  svcdat <- svc@data
+
+  if(!is.null(sampleids)){
+    missing.samples <- setdiff(sampleids,c(svcdat$sample,cnvdat$sample))
+    if(length(missing.samples) == length(unique(sampleids))){
+      stop("None of the samples provided were found in 'sv' and 'cnv' input data!")
+    }else if(length(missing.samples) > 0){
+      warning(paste("The following samples provided are not found in 'sv' and 'cnv' input data:", paste(missing.samples,collapse=" "),sep=" "))
+    }
+    svcdat<-svcdat[which(svcdat$sample %in% intersect(sampleids,svcdat$sample)),]
+    cnvdat<-cnvdat[which(cnvdat$sample %in% intersect(sampleids,cnvdat$sample)),]
+  }
+
+  genegr <- with(data.frame(chrom,start,stop), GRanges(chrom, IRanges(start=start, end=stop)))
+
+  # Find samples with SV breaks within defined genomic region
+  sv1gr = with(svcdat, GRanges(chrom1, IRanges(start=pos1, end=pos1)))
+  sv2gr = with(svcdat, GRanges(chrom2, IRanges(start=pos2, end=pos2)))
+
+  sv_hits1 = GenomicAlignments::findOverlaps(sv1gr,genegr)
+  sv_hits2 = GenomicAlignments::findOverlaps(sv2gr,genegr)
+  svtab <- svcdat[sort(unique(c(queryHits(sv_hits1),queryHits(sv_hits2)))),]
+  svBreakSamples <- unique(svtab$sample)
+  if(length(svBreakSamples) == 0) warning("Thre is no SV breakpoints in the defined genomic region")
+
+  # obtain SVs for plotting with different colors for each svclass
+  svcolormap = setNames(c("blue", "red", "orange", "black", "green","grey20"),
+                        c("DEL", "DUP", "INV", "TRA", "INS", "BND"))
+  svcolor <- svcolormap[svtab$svclass]
+  svtab_plot <- data.table(svtab,svcolor)
+  svtab_plot_seg <- svtab_plot[which(svtab_plot$svclass != "TRA")]
+  svtab_plot_tra <- svtab_plot[which(svtab_plot$svclass == "TRA")]
+
+  # Find samples with CNV segment breaks within defined genomic region
+  seg1br  = with(cnvdat, GRanges(chrom, IRanges(start=start, end=start)))
+  seg2br  = with(cnvdat, GRanges(chrom, IRanges(start=end, end=end)))
+  seg_hits1 = GenomicAlignments::findOverlaps(seg1br,genegr)
+  seg_hits2 = GenomicAlignments::findOverlaps(seg2br,genegr)
+  segBreakSamples <- unique(cnvdat[sort(unique(c(queryHits(seg_hits1),queryHits(seg_hits2))))]$sample)
+  if(length(segBreakSamples) == 0) warning("Thre is no CNV segment breakpoints in the defined genomic region")
+  segbrk <- cnvdat[sort(unique(c(queryHits(seg_hits1),queryHits(seg_hits2))))]
+
+  if(plot==TRUE){
+    # Find overlap between all CNV segments and the defined genomic region for plotting
+
+    seggr <- with(cnvdat, GRanges(chrom, IRanges(start=start, end=end)))
+    hits_seg = GenomicAlignments::findOverlaps(seggr,genegr)
+    seg_plot <- cnvdat[queryHits(hits_seg)]
+    ##设置热图的颜色
+    if(is.null(seg.color)){
+      segcolor <- map2color(seg_plot$segmean,
+                            pal=colorRampPalette(c("lightblue","white","salmon"))(256),
+                            limits=cnvlim)} else{
+                              segcolor <- map2color(seg_plot$segmean,
+                                                    pal=colorRampPalette(seg.color)(256),
+                                                    limits=cnvlim)
+                            }
+
+    seg_plot <- data.table(seg_plot,segcolor)
+
+    if(!is.null(sampleids)){
+      sample_order <- 1:length(sampleids)
+      names(sample_order) <- sampleids
+    }else{
+      sample_order <- 1:length(unique(c(svBreakSamples,segBreakSamples)))
+      names(sample_order) <- unique(c(svBreakSamples,segBreakSamples))
+    }
+    ##设置图例背景
+    if(!is.null(addlegend)){
+      plot_ylim <- length(sample_order)*10/100+length(sample_order)
+      legend_ypos <- plot_ylim - length(sample_order)*3/100
+      if(length(sample_order) < 10) plot_ylim <- length(sample_order) +1
+    }else{
+      plot_ylim <- length(sample_order)
+    }
+    ##画一个空的背景
+    plot(x=NULL,y=NULL,xlim=range(c(start,stop)),ylim=range(c(0,plot_ylim)),
+         xaxt='n',yaxt='n',xlab='',ylab='',bty='n', ...)
+    ##添加左边的行名
+    mtext(side=2,at=sample_order-0.5,text=names(sample_order),las=2,line = 0.5, ...)
+    ##添加绘图的灰色背景
+    for(sid in names(sample_order)){
+      ypos <- sample_order[sid]
+      polygon(rbind(
+        c(start-1e7,ypos+0.02),#左上
+        c(start-1e7,ypos-0.98),#左下
+        c(stop+1e7,ypos-0.98),#右下
+        c(stop+1e7,ypos+0.02)),#右上
+        col=rep(c("white","white"),length(sample_order))[ypos],border=NA)
+      #col=rep(c("grey80","grey80"),length(sample_order))[ypos],border=NA)
+    }
+    ##添加seg 热图
+    for(sid in names(sample_order)){
+      seg_sample_plot <- seg_plot[which(seg_plot$sample == sid),]
+      ypos <- sample_order[sid]
+      for(i in 1:nrow(seg_sample_plot)){
+        polygon(rbind(
+          c(seg_sample_plot[i]$start,ypos-seg.sep),#左上
+          c(seg_sample_plot[i]$start,ypos-1+seg.sep),#左下
+          c(seg_sample_plot[i]$end,ypos-1+seg.sep),#右下
+          c(seg_sample_plot[i]$end,ypos-seg.sep)#右上
+        ),col=seg_sample_plot[i]$segcolor,border=NA)
+      }
+    }
+
+    ##添加SV的标记
+    if(sv.label){
+      ##添加TRA的符号
+      for(sid in unique(svtab_plot_tra$sample)){
+        svtab_plot_tra_i <- svtab_plot_tra[which(svtab_plot_tra$sample == sid),]
+        ypos <- sample_order[sid]
+        addrnorm <- rep(c(0,0.3,-0.3,0.1,-0.1,0.2,-0.2),nrow(svtab_plot_tra_i))
+        for(i in 1:nrow(svtab_plot_tra_i)){
+          if(svtab_plot_tra_i[i]$chrom2 == chrom){
+            points(svtab_plot_tra_i[i]$pos2,ypos-0.5+addrnorm[i],pch=10)
+            lines(c(svtab_plot_tra_i[i]$pos2,svtab_plot_tra_i[i]$pos2),c(ypos,ypos-1),lwd=1,lty=3)
+            if("TRA" %in% addtext){
+              text(svtab_plot_tra_i[i]$pos2,ypos-0.5+addrnorm[i],
+                   paste("  ",svtab_plot_tra_i[i]$chrom1,":",svtab_plot_tra_i[i]$pos1,sep=""),
+                   pos=4,offset=0,cex=cex.text)
+            }
+          }
+          if(svtab_plot_tra_i[i,"chrom1"] == chrom){
+            points(svtab_plot_tra_i[i]$pos1,ypos-0.5+addrnorm[i],pch=10)
+            lines(c(svtab_plot_tra_i[i]$pos1,svtab_plot_tra_i[i]$pos1),c(ypos,ypos-1),lwd=1,lty=3)
+            if("TRA" %in% addtext) {
+              text(svtab_plot_tra_i[i]$pos1,ypos-0.5+addrnorm[i],
+                   paste("  ",svtab_plot_tra_i[i]$chrom2,":",svtab_plot_tra_i[i]$pos2,sep=""),
+                   pos=4,offset=0,cex=cex.text)
+            }
+          }
+        }
+      }
+      ##添加另外三种突变类型的标记
+      for(sid in unique(svtab_plot_seg$sample)){
+        svtab_plot_seg_i <- svtab_plot_seg[which(svtab_plot_seg$sample == sid)]
+        ypos <- sample_order[sid]
+        addrnorm <- rep(c(0,0.2,-0.2,0.1,-0.1,0.3,-0.3),nrow(svtab_plot_seg_i))
+        for(i in 1:nrow(svtab_plot_seg_i)){
+          polygon(rbind(
+            c(svtab_plot_seg_i[i]$pos1,ypos-0.4-addrnorm[i]),
+            c(svtab_plot_seg_i[i]$pos1,ypos-0.6-addrnorm[i]),
+            c(svtab_plot_seg_i[i]$pos2,ypos-0.6-addrnorm[i]),
+            c(svtab_plot_seg_i[i]$pos2,ypos-0.4-addrnorm[i])
+          ),col=NA,border=svtab_plot_seg_i[i]$svcolor)
+
+          if(svtab_plot_seg_i[i]$svclass %in% addtext){
+            if(svtab_plot_seg_i[i]$pos1 < start){
+              text(start,ypos-0.5-addrnorm[i],
+                   paste("<-",svtab_plot_seg_i[i]$pos1,sep=""),
+                   pos=4,offset=0,cex=cex.text)
+            }
+            if(svtab_plot_seg_i[i]$pos2 > stop){
+              text(stop,ypos-0.5-addrnorm[i],
+                   paste(svtab_plot_seg_i[i]$pos2,"->",sep=""),
+                   pos=2,offset=0,cex=cex.text)
+            }
+          }
+        }
+      }
+    }
+    ##添加下面的坐标标尺
+    if(axis.label){
+      if(is.null(interval)) interval <- round((stop - start)/5000) * 1000
+      xlabs <- seq(floor(start/10000)*10000, ceiling(stop/10000)*10000,interval)
+      axis(1, at = xlabs,labels=TRUE, lwd.ticks=1.5, pos=0,...)
+    }
+    if(is.null(cex.legend)) cex.legend <- 1
+
+    ##添加sv注释
+    if(sv.label){
+      if(addlegend %in% c("sv","both")) {
+        fillx <- c("white", "white", "white", "white", "white",NA)
+        borderx <- c("blue", "red","orange","green","grey20",NA)
+        pchx <- c(NA,NA,NA,NA,NA,10)
+        names(fillx) <- names(borderx) <- names(pchx) <- c("DEL", "DUP", "INV","INS","BND", "TRA")
+        svclassin <- sort(unique(svtab_plot$svclass))
+        legend(x= start, y =legend_ypos+0.2, legend = svclassin, bg=NA,
+               bty = "n", fill = fillx[svclassin], border=borderx[svclassin],
+               pch = pchx[svclassin], horiz = TRUE, x.intersp=0.2, cex = cex.legend)
+      }
+    }
+    ##添加seg注释
+    if(addlegend %in% c("cnv","both")) {
+      if(is.null(seg.color)){
+        colkey(colorRampPalette(c("lightblue","white","salmon"))(256),clim = c(-2,2),side=3,add=TRUE,side.clab=1,length=0.5,shift=0.2,lwd.ticks = 2, dist = -0.12)
+      }else{(colkey(colorRampPalette(seg.color)(256),clim = c(-2,2),side=3,add=TRUE,side.clab=1,length=0.5,shift=0.2,lwd.ticks = 2, dist = -0.12))
+      }
+    }
+    if(summary){
+      return(list(svbrk=svcdat,segbrk=segbrk))
+    }
+  }}
+
+
+##step1 处理input
+load("2.analysis/config_986.Rdata")
+#cnv
+head(nbl_segdat) #看下要弄成哪样
+lc_segdat <- read.delim("1.resources/fuscc_lc_cnv_seg_20221129_utf8.txt",sep=" ")
+lc_segdat <- lc_segdat %>%
+  mutate(Sample=sample_id,
+         Chromosome=chr,
+         Start=start,
+         End=end,
+         Num_markers=number_markers,
+         segmean=log2(total_cn/2)) %>%
+        select(7:12)
+lc_cnv <- validate.cnv(lc_segdat)
+#sv
+head(nbl_svdat)
+lc_svdat <- read.delim("1.resources/lc986.mantasv.bedpe")
+lc_svdat <- lc_svdat %>%
+  mutate(sample=SAMPLE,
+         chrom1=X.CHROM_A,
+         pos1=START_A,
+         strand1="+",
+         chrom2=CHROM_B,
+         pos2=START_B,
+         strand2="+",
+         svclass=ifelse(TYPE=="BND","TRA",TYPE))%>%
+  select(sample,chrom1,pos1,strand1,chrom2,pos2,strand2,svclass)
+lc_sv <- validate.svc(lc_svdat)
+
+##step2 绘图svpluscnv
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_flanking_bnd_overlap.Rdata") ##加载进来的对象是result
+load("~/1000_noncoding/3.SV_analysis/2.analysis/expr_all.Rdata")
+#弄成函数，给基因直接出图
+plotsvpluscnv <- function(gene){
+  ##设置绘图范围,上下500kb
+  refSeqGene <- gene.symbol.info(refseq_hg38,gene)
+  chrom <- refSeqGene$chrom
+  start <- refSeqGene$start - 500000
+  stop <- refSeqGene$stop + 500000
+  #results_svc <- svc.break.annot(lc_sv, svc.seg.size = 200000000, genome.v="hg38",upstr = 500000,dnstr = 500000, verbose=FALSE)
+  sampleids <- sort(unique(result$SAMPLE[result$gene_name == gene]))
+  # We build a layout to combine `svc.model.view` and `gene.track.view` using the same set of genomic coordinates
+  #layout(matrix(c(1,1,2,2),2,2 ,byrow = TRUE),heights = c(8,2))
+  #par(mar=c(0,10,1,1))
+  if(0){
+    sv.model.view(lc_cnv, lc_sv, chrom, start, stop, sampleids=sampleids,
+                  addlegend = 'both', addtext=c("TRA"), cnvlim = c(-2,2),
+                  cex=.7,cex.text =.8, summary = FALSE)
+  }
+  ##每10个样本出一张图
+  group_size <- 10
+  num_groups <- ceiling(length(sampleids) / group_size)
+  group_names <- sapply(1:num_groups, function(i) {
+    start_index <- (i - 1) * group_size + 1
+    end_index <- min(i * group_size, length(sampleids))
+    paste(start_index, end_index, sep = "-")
+  })
+  for(i in 1:num_groups){
+    filename=paste0("pictures/svpluscnv_rawfigures/",gene,"_",group_names[i],"svpluscnv.png")
+    png(file = filename,width = 1000,height = 800)
+    layout(matrix(c(1,1,2,2),2,2 ,byrow = TRUE),heights = c(8,2))
+    par(mar=c(0,10,1,1))
+    start_index <- (i - 1) * group_size + 1
+    end_index <- min(i * group_size, length(sampleids))
+    sampleid <- sampleids[start_index:end_index]
+    sv.model.view.modified(lc_cnv, lc_sv, chrom, start, stop, sampleids=sampleid,
+                           addlegend = "both", addtext=c("TRA"), cnvlim = c(-2,2),
+                           cex=.7,cex.text =.8, summary = FALSE,
+                           seg.color = c("#626DA5","white","#D3544E"),
+                           sv.label = T,axis.label = T,seg.sep = 0.04)
+    gene.track.view(chrom=chrom ,start=start, stop=stop, addtext=F, cex.text=0.6,
+                    summary = FALSE,genome.v = "hg38")
+    dev.off()
+  }
+
+  ##outlier_withsv弄成一张
+  expr_rownames <- rownames(expr_allsamples)
+  expr_hugosymbol <- sapply(expr_rownames,function(x) strsplit(x,"\\|")[[1]][2])
+  get_outliers <- function(expr_df,gene,expr_rownames,expr_hugosymbol){
+    #如果该基因是ENSG开头,与在rownames里即可
+    if(grepl("^ENSG",gene)){
+      d_f <- expr[grepl(gene,expr_rownames),]
+    }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+      d_f <- expr[expr_hugosymbol==gene,]
+    }
+    #如果能匹配上
+    if(nrow(d_f)==1){
+      outlier_samples <- apply(d_f, 1, function(x) {
+        stats <- boxplot.stats(x)
+        if (length(stats$out) > 0) {
+          return(names(x)[x %in% stats$out])  # 返回离群值对应的样本名
+        } else {
+          return(NULL)  # 没有离群值则返回 NULL
+        }
+      })
+      return(outlier_samples)
+    }else{return(NA)
+    }
+  }
+  outliers <- get_outliers(expr_df,gene,expr_rownames,expr_hugosymbol)
+  outlier_withsv <- intersect(sampleids,outliers)
+  if(!is.null(outlier_withsv)){
+    filename=paste0("pictures/svpluscnv_rawfigures/",gene,"v2outlier_svpluscnv.png")
+    png(file = filename,width = 1000,height = 800)
+    layout(matrix(c(1,1,2,2),2,2 ,byrow = TRUE),heights = c(8,2))
+    par(mar=c(0,10,1,1))
+    sv.model.view.modified(lc_cnv, lc_sv, chrom, start, stop, , sampleids=outlier_withsv,
+                           addlegend = "both", addtext=c("TRA"), cnvlim = c(-2,2),
+                           cex=.7,cex.text =.8, summary = FALSE,
+                           seg.color = c("#626DA5","white","#D3544E"),
+                           sv.label = T,axis.label = T,seg.sep = 0.04)
+    gene.track.view(chrom=chrom ,start=start, stop=stop, addtext=F, cex.text=0.6,
+                    summary = FALSE,genome.v = "hg38")
+    dev.off()
+  }
+}
+
+interest_genes <- c("CCNE1","AURKA","TOP2A","HMGA1",
+                    "AURKB","KDR","TERT","TRIP13")
+for(i in interest_genes){
+  plotsvpluscnv(i)
+}
+
+```
+                                                    (Result)

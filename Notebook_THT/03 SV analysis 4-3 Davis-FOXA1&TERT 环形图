@@ -1,0 +1,121 @@
+# 绘制SV的环形图           (What)
+
+* Aug 23, 2025                                     (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis   (Where)
+*                                                   (Why)
+
+
+## 代码                                     (How)
+
+```
+##先试下Rcircos这个包
+
+##loading packages
+library(RCircos)
+library(dplyr)
+library(stringr)
+
+##load files
+##把bedpe格式数据导入进来
+load("~/1000_noncoding/3.SV_analysis/2.analysis/bedpe_678.Rdata")
+if(0){
+  lc986.mantasv.bedpe <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/lc986.mantasv.bedpe")
+  #load("~/1000_noncoding/3.SV_analysis/2.analysis/config_678.Rdata")
+  bedpe_986 <- lc986.mantasv.bedpe %>%
+    #filter(SAMPLE %in% config_678) %>% #取出其中678的样本
+    mutate(
+      # 使用str_split拆分ID列并创建列表
+      split_ID = str_split(ID, ":"),
+
+      # 根据拆分后的列表长度和内容来构建SV_ID
+      SV_ID = case_when(
+        # 如果第二项不是TANDEM，取前两项
+        sapply(split_ID, function(x) x[2]) != "TANDEM" ~
+          sapply(split_ID, function(x) paste(x[1], x[2], sep = ":")),
+
+        # 如果第二项是TANDEM，取前三项
+        sapply(split_ID, function(x) x[2]) == "TANDEM" ~
+          sapply(split_ID, function(x) paste(x[1], x[2], x[3], sep = ":")),
+
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    mutate(SV_ID=paste(SAMPLE,SV_ID,sep = ":")) %>%
+    select(-split_ID)
+  #save(bedpe_678,file="~/1000_noncoding/3.SV_analysis/2.analysis/bedpe_678.Rdata")
+  colnames(bedpe_986)[1] <- "CHROM_A"
+  save(bedpe_986,file="~/1000_noncoding/3.SV_analysis/2.analysis/bedpe_986.Rdata")
+  }
+#生成一个SV_ID对象便于和后面的flanking数据整合
+##把每个基因上下游500kb的SV纳入进来,result
+load("~/1000_noncoding/3.SV_analysis/2.analysis/flanking_bnd_overlap.Rdata")
+##play around
+if(0){
+data(RCircos.Histogram.Data)
+head(RCircos.Histogram.Data)
+data(RCircos.Heatmap.Data)
+head(RCircos.Heatmap.Data)
+data(RCircos.Link.Data)
+head(RCircos.Link.Data)
+}
+
+##set functions
+#输入基因得到绘图用的表格
+get_df <- function(gene){
+  df <- result %>%
+    filter(gene_name==gene)
+  df1 <- bedpe_678 %>%
+    left_join(df,by=c("SV_ID"))
+  df1 <- na.omit(df1)
+  df1 <- df1 %>%
+    select(1:7,SAMPLE.x,SV_ID)
+  df1 <- unique(df1)
+  df1 <- df1 %>%
+    distinct(SV_ID, .keep_all = TRUE)
+  colnames(df1) <- c("Chromosome","chromStart","chromEnd",
+                     "Chromosome.1","chromStart.1","chromEnd.1","ID","sample","SV_ID")
+  ##设置颜色，Inter_chromosome设为?色，Intra的设为?色
+  df1 <- df1 %>%
+    mutate(
+      # 根据ID列是否包含BND设置PlotColor
+      PlotColor = if_else(str_detect(ID, "BND"), "#82093B", "#4D7798")
+    )
+  return(df1)
+  }
+
+
+##导入基因组数据
+data(UCSC.HG38.Human.CytoBandIdeogram)
+head(UCSC.HG38.Human.CytoBandIdeogram)
+##设置图的参数
+chr.exclude <- NULL
+cyto.info <- UCSC.HG38.Human.CytoBandIdeogram
+tracks.inside <- 0
+tracks.outside <- 0
+RCircos.Set.Core.Components(cyto.info, chr.exclude,
+                            tracks.inside, tracks.outside)
+##设置画布和构图
+out.file <- "~/1000_noncoding/3.SV_analysis/pictures/GOI_circosplot_v2.png"
+png(file=out.file,width =1500 ,height = 600,res = 150)
+genes <- c("CCNE1","AURKA","TOP2A","HMGA1",
+           "KDR","AURKB","TERT","TRIP13")
+# 设置两行五列的布局
+layout(matrix(1:10, nrow = 2, ncol = 4,byrow = T))
+for(gene in genes){
+RCircos.Set.Plot.Area(margins = 0)
+##绘制基因组
+RCircos.Chromosome.Ideogram.Plot()
+##绘制环里面的线
+###准备绘图数据框，是类似bedpe的格式,chr1,start1,end1,chr2,start2,end2
+df1 <- get_df(gene)
+track.num <- 1
+RCircos.Link.Plot(df1, track.num, FALSE)
+}
+dev.off()
+
+sessionInfo()
+
+
+```
+                                                    (Result)
+The output from FASTQC and multiqc look good!  Proceeding to differential expression analysis of unicorn horn between activated and unactivated samples.

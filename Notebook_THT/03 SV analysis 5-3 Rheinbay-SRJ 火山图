@@ -1,0 +1,133 @@
+# Quality check on Unicorn RNASeq data             (What)
+
+* Aug 23, 2025                                     (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
+*                                                   (Why)
+I want to make sure that the quality of my reads obtained from the Illumina Novaseq look good before proceeding.
+
+
+## 代码                                          (How)
+
+```
+##loading packages
+library(tidyverse)
+library(ggthemes)
+library(ggsci)
+
+load("~/1000_noncoding/3.SV_analysis/2.analysis/3-3_absolute_cn_long.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/5-2.df_svcluster_expr.Rdata")
+#得到癌基因list
+if(1){
+  cancer_gene_737_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/737 cancer genes by pcawg.csv"
+  lung_drivers_df_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/20220203_lung_drivers.csv"
+  cosmic_census_cancer_gene_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/Cancer Gene Census v100.tsv"
+  oncokb_drivergenes_list_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/oncokb_cancerGeneList_2024_10_24.tsv"
+  OncoKB_driver <- fread(oncokb_drivergenes_list_filepath)
+  CGC_driver <- fread(cosmic_census_cancer_gene_filepath)
+  PCAWG_driver <- fread(cancer_gene_737_filepath)
+  names(PCAWG_driver) <- "Gene_Symbol"
+  lung_driver <- fread(lung_drivers_df_filepath)
+  all_drivergenes_list <- union(OncoKB_driver$`Hugo Symbol`,CGC_driver$`Gene Symbol`)
+  all_drivergenes_list  <- union(all_drivergenes_list,PCAWG_driver$Gene_Symbol)
+  all_drivergenes_list <- union(all_drivergenes_list,lung_driver$Gene_Symbol)
+  all_drivergenes_df <- data.frame(gene=all_drivergenes_list) %>%
+    mutate(`Gene Symbol`=gene,`Hugo Symbol`=gene) %>%
+    left_join(OncoKB_driver,by=c("Hugo Symbol")) %>%
+    left_join(CGC_driver,by=c("Gene Symbol")) %>%
+    select(gene,`Is Oncogene`,`Is Tumor Suppressor Gene`,`Role in Cancer`)
+
+}
+
+##准备绘图用的数据框,只看癌基因
+## 筛选阈值
+lfc=1
+pval=0.05
+df <- df_svcluster_expr %>%
+  #得到基因是不是癌基因还是抑癌基因，用于后面标记
+  mutate(gene=gene_name) %>%
+  left_join(all_drivergenes_df,by=c("gene")) %>%
+  select(-gene) %>%
+  #去掉<50肿瘤中表达的基因
+  filter(expr_over_50==T) %>%
+  #去掉cnnormal_expr_p为NA的基因
+  filter(!is.na(cnnormal_expr_p)) %>%
+  #去掉样本数小于5的基因
+  filter(distinct_samples>=5) %>%
+  #得到绘图用的几项
+  mutate(gene_id=gene_name,
+         log2FoldChange=as.numeric(cnnormal_expr_log2FC),
+         p=as.numeric(cnnormal_expr_p)) %>%
+  mutate(color=case_when(
+    abs(log2FoldChange)>lfc & p>pval ~ "grey",
+    abs(log2FoldChange)<lfc & p<pval ~ "grey",
+    #abs(log2FoldChange)>lfc & p<pval ~ pal_nejm("default", alpha = 0.4)(8)[1],
+    abs(log2FoldChange)>lfc & p<pval ~ "#ED8172",
+    abs(log2FoldChange)<lfc & p>pval ~ "grey"
+  ),
+  plot_label=case_when(
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange > 0 & `Is Oncogene`=="Yes"~ gene_id,
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange < 0 & `Is Tumor Suppressor Gene`=="Yes" ~ gene_id
+  )
+  ) %>%
+  select(gene_id,log2FoldChange,p,
+         `Is Oncogene`,`Is Tumor Suppressor Gene`,distinct_samples,
+         color,plot_label)
+
+##绘图
+#导入自定义主题
+p5_3_1 <- ggplot(df,aes(log2FoldChange, -log10(p), fill=color,label=plot_label)) +
+  geom_point(alpha=1,size=4,pch=21) +
+  #geom_text(hjust=-0.3, vjust=0) +
+  scale_fill_identity() +
+  labs(x=expression(Log[2]~fold~change), y=expression(-~Log[10]~p~value)) +
+  geom_vline(xintercept=c(-lfc,lfc), linetype=2) + geom_hline(yintercept=-log10(pval), linetype=5) +
+  ggrepel::geom_label_repel(alpha=1,family="sans",color="black",fill="white",face="italicize",max.overlaps = Inf) +
+  #scale_y_log10() +
+  #xlim(-3,3) +
+  theme_bw() +
+  theme(axis.title = element_text(size=16),
+        text = element_text(family="sans"))
+
+
+#ggsave("./Fig/volcano.pdf",width=6,height=6)
+
+##简单看一下找出来的这些candidates
+df <- df_svcluster_expr %>%
+  #得到基因是不是癌基因还是抑癌基因，用于后面标记
+  mutate(gene=gene_name) %>%
+  left_join(all_drivergenes_df,by=c("gene")) %>%
+  select(-gene) %>%
+  #去掉<50肿瘤中表达的基因
+  filter(expr_over_50==T) %>%
+  #去掉cnnormal_expr_p为NA的基因
+  filter(!is.na(cnnormal_expr_p)) %>%
+  #去掉样本数小于5的基因
+  filter(distinct_samples>=5) %>%
+  #得到绘图用的几项
+  mutate(gene_id=gene_name,
+         log2FoldChange=as.numeric(cnnormal_expr_log2FC),
+         p=as.numeric(cnnormal_expr_p)) %>%
+  mutate(color=case_when(
+    abs(log2FoldChange)>lfc & p>pval ~ "grey",
+    abs(log2FoldChange)<lfc & p<pval ~ "grey",
+    #abs(log2FoldChange)>lfc & p<pval ~ pal_nejm("default", alpha = 0.4)(8)[1],
+    abs(log2FoldChange)>lfc & p<pval ~ "#ED8172",
+    abs(log2FoldChange)<lfc & p>pval ~ "grey"
+  ),
+  plot_label=case_when(
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange > 0 & `Is Oncogene`=="Yes"~ gene_id,
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange < 0 & `Is Tumor Suppressor Gene`=="Yes" ~ gene_id
+  )
+  ) %>%
+  mutate(n_p_l = distinct_samples/merge_width*1000000) %>%
+  filter(!is.na(plot_label) | (gene_name=="PPP1CB" & distinct_samples==20)) %>%
+  select(1:10,n_p_l) %>%
+  left_join(df_cancergene_svcluster,by=c("chr_merge","start_merge","end_merge",
+                                         "gene_name","distinct_samples","merge_width")) %>%
+  select(1:11,SAMPLE) %>%
+  mutate(Gene=gene_name,Sample=SAMPLE) %>%
+  left_join(absolute_cn_long,by=c("Gene","Sample")) %>%
+  select(1:12,16) %>%
+  left_join( )
+```
+                                                    (Result)

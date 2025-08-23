@@ -1,0 +1,175 @@
+# Quality check on Unicorn RNASeq data             (What)
+
+* Aug 23, 2025                                     (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
+*                                                   (Why)
+I want to make sure that the quality of my reads obtained from the Illumina Novaseq look good before proceeding.
+
+
+## 代码                                          (How)
+
+```
+####在5-3中得到了一些感兴趣的基因，这里比较WT,SV,CNV三种突变形式对其表达的影响##
+
+##loading packages
+library(ggplot2)
+library(ggpubr)
+library(patchwork)
+
+##loading files需要拷贝数数据，SV数据和表达数据,以及config
+load("~/1000_noncoding/3.SV_analysis/2.analysis/expr_all.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/3-3_absolute_cn_long.Rdata")
+colnames(absolute_cn_long)[3] <- "SAMPLE"
+load("~/1000_noncoding/3.SV_analysis/2.analysis/config_986.Rdata")
+#得到基因上下游500kb有无断点
+load("~/1000_noncoding/3.SV_analysis/2.analysis/5-1_df_cancergene_svcluster.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/5-2.df_svcluster_expr.Rdata")
+df <- df_svcluster_expr %>%
+  #得到基因是不是癌基因还是抑癌基因，用于后面标记
+  mutate(gene=gene_name) %>%
+  left_join(all_drivergenes_df,by=c("gene")) %>%
+  select(-gene) %>%
+  #去掉<50肿瘤中表达的基因
+  filter(expr_over_50==T) %>%
+  #去掉cnnormal_expr_p为NA的基因
+  filter(!is.na(cnnormal_expr_p)) %>%
+  #去掉样本数小于5的基因
+  filter(distinct_samples>=5) %>%
+  #得到绘图用的几项
+  mutate(gene_id=gene_name,
+         log2FoldChange=as.numeric(cnnormal_expr_log2FC),
+         p=as.numeric(cnnormal_expr_p)) %>%
+  mutate(color=case_when(
+    abs(log2FoldChange)>lfc & p>pval ~ "grey",
+    abs(log2FoldChange)<lfc & p<pval ~ "grey",
+    #abs(log2FoldChange)>lfc & p<pval ~ pal_nejm("default", alpha = 0.4)(8)[1],
+    abs(log2FoldChange)>lfc & p<pval ~ "#ED8172",
+    abs(log2FoldChange)<lfc & p>pval ~ "grey"
+  ),
+  plot_label=case_when(
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange > 0 & `Is Oncogene`=="Yes"~ gene_id,
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange < 0 & `Is Tumor Suppressor Gene`=="Yes" ~ gene_id
+  )
+  ) %>%
+  mutate(n_p_l = distinct_samples/merge_width*1000000) %>%
+  filter(!is.na(plot_label)| (gene_name=="PPP1CB" & distinct_samples==20)) %>%
+  select(1:10,n_p_l) %>%
+  left_join(df_cancergene_svcluster,by=c("chr_merge","start_merge","end_merge",
+                                         "gene_name","distinct_samples","merge_width")) %>%
+  select(1:11,SAMPLE) %>%
+  mutate(Gene=gene_name,Sample=SAMPLE) %>%
+  left_join(absolute_cn_long,by=c("Gene","SAMPLE")) %>%
+  select(1:12,16)
+
+
+
+
+
+
+
+##整理数据框及绘图
+#gene sample cnv(amp,homo_loss,wt) sv(基因上下游500kb有没有断点) expr(deseq2矫正后的counts) group(wt,cnv,sv) group_N
+get_boxplot_oncogene <- function(gene){
+  sv <- df[df$gene_name==gene,]
+  sv <- sv[,c("gene_name","SAMPLE")]
+  sv$sv <- TRUE
+  cnv <- absolute_cn_long[absolute_cn_long$Gene==gene,]
+  expr_rownames <- rownames(expr)
+  expr_hugosymbol <- sapply(expr_rownames,function(x) strsplit(x,"\\|")[[1]][2])
+  if(grepl("^ENSG",gene)){
+    expr_df <- as.data.frame(t(expr[grepl(gene,expr_rownames),]))
+  }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+    expr_df <- as.data.frame(t(expr[expr_hugosymbol==gene,]))
+  }
+  expr_df$SAMPLE <- rownames(expr_df)
+  names(expr_df)[1] <- "expr"
+  #把前面几个数据框和起来得到绘图用的数据框
+  df <- data.frame("SAMPLE"=config_986,gene=gene)
+  df <- df %>%
+    left_join(sv,by=c("SAMPLE")) %>%
+    left_join(cnv,by=c("SAMPLE")) %>%
+    left_join(expr_df,by=c("SAMPLE")) %>%
+    select(-gene_name)
+  df$sv <- ifelse(is.na(df$sv),"NA",df$sv)
+  df <- na.omit(df)
+  df <- unique(df)
+  #把sv的NA改成FALSE,添加group,将counts取对数，绘图更好看
+  df <- df %>%
+    mutate(sv=ifelse(is.na(sv),FALSE,sv),
+           group=ifelse(
+             Absolute_CN>=4,"Amp",
+             ifelse(sv==T,"SV","WT")
+           ),
+           expr=log2(expr+1))  %>%
+    group_by(group) %>%
+    mutate(group_n = n()) %>%
+    ungroup()
+  p <- ggplot(df,aes(x=group,y=expr,color=group)) +
+    geom_boxplot()+
+    theme_bipin()+
+    scale_color_manual(values = c("Amp"="#341831","SV"="#82093B","WT"="#606060"))+
+    scale_x_discrete(
+      labels = c(paste0("Amp\n(N=",unique(df$group_n[df$group=="Amp"]),")"),
+                 paste0("SV\n(N=",unique(df$group_n[df$group=="SV"]),")"),
+                 paste0("WT\n(N=",unique(df$group_n[df$group=="WT"]),")"))
+    ) +
+    theme(legend.position="none")+
+    ylim(0,ceiling(max(df$expr)+3.5))+
+    labs(x=gene,y="log2[Counts(Deseq2)+1]")
+  my_comparisons <- list(c("WT","SV"), c("WT", "Amp"))
+  p1 <- p+stat_compare_means(comparisons = my_comparisons,
+                             label.y = c(max(df$expr)+0.5,max(df$expr)+2.5))+ #默认就是wilconx秩和检验
+    theme()
+  return(p1)
+}
+
+oncogene_ofinterest <- c("CCNE1","CDK6","MYC",
+                         "FGF5","PPP1CB","RNASEH2A",
+                         "SQSTM1","UCHL1")
+for(gene in oncogene_ofinterest){
+  p_name <- paste("p",gene,sep = "_")
+  assign(p_name,get_boxplot_oncogene(gene))
+}
+png(filename = "~/1000_noncoding/3.SV_analysis/pictures/Rheinbay_boxplots/rheinbay_merge_boxplotv3(res=300,3500:2500).png",
+    res = 300,width = 3500,height = 2500)
+(p_CCNE1 | p_CDK6 | p_MYC | p_FGF5 ) / (p_PPP1CB | p_RNASEH2A | p_SQSTM1 | p_UCHL1 )
+dev.off()
+df <- rheinbay_test_cancergene_svcluster_expr %>%
+  #得到基因是不是癌基因还是抑癌基因，用于后面标记
+  mutate(gene=gene_name) %>%
+  left_join(all_drivergenes_df,by=c("gene")) %>%
+  select(-gene) %>%
+  #去掉<50肿瘤中表达的基因
+  filter(expr_over_50==T) %>%
+  #去掉cnnormal_expr_p为NA的基因
+  filter(!is.na(cnnormal_expr_p)) %>%
+  #去掉样本数小于5的基因
+  filter(distinct_samples>=5) %>%
+  #得到绘图用的几项
+  mutate(gene_id=gene_name,
+         log2FoldChange=as.numeric(cnnormal_expr_log2FC),
+         p=as.numeric(cnnormal_expr_p)) %>%
+  mutate(color=case_when(
+    abs(log2FoldChange)>lfc & p>pval ~ "grey",
+    abs(log2FoldChange)<lfc & p<pval ~ "grey",
+    #abs(log2FoldChange)>lfc & p<pval ~ pal_nejm("default", alpha = 0.4)(8)[1],
+    abs(log2FoldChange)>lfc & p<pval ~ "#ED8172",
+    abs(log2FoldChange)<lfc & p>pval ~ "grey"
+  ),
+  plot_label=case_when(
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange > 0 & `Is Oncogene`=="Yes"~ gene_id,
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange < 0 & `Is Tumor Suppressor Gene`=="Yes" ~ gene_id
+  )
+  ) %>%
+  mutate(n_p_l = distinct_samples/merge_width*1000000) %>%
+  filter(!is.na(plot_label)| (gene_name=="PPP1CB" & distinct_samples==20)) %>%
+  select(1:10,n_p_l) %>%
+  left_join(rheinbay_test_cancergene_svcluster,by=c("chr_merge","start_merge","end_merge",
+                                         "gene_name","distinct_samples","merge_width")) %>%
+  select(1:11,SAMPLE) %>%
+  mutate(Gene=gene_name,Sample=SAMPLE) %>%
+  left_join(absolute_cn_long,by=c("Gene","SAMPLE")) %>%
+  select(1:12,16)
+
+```
+                                                    (Result)

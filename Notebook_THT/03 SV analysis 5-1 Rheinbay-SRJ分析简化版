@@ -1,0 +1,237 @@
+#             (What)
+
+* Aug 23, 2025                                     (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
+*                                                   (Why)
+
+## 代码                                        (How)
+
+```
+##loading packages
+library(GenomicRanges)
+library(dplyr)
+library(parallel)
+
+
+##loading files
+#需要SV的bedpe文件
+load("~/1000_noncoding/3.SV_analysis/2.analysis/bedpe_986.Rdata") #bedpe_986
+#需要基因的上下500kb flanking文件(实际上是经典转录本的上下500kb 转录本)
+load("~/1000_noncoding/3.SV_analysis/2.analysis/3-3v3.gene_flanking.Rdata") #gene_flanking
+load("~/1000_noncoding/3.SV_analysis/2.analysis/3-3v3.gr_gene_flankings.Rdata") #gr_gene_flankings
+load("~/1000_noncoding/3.SV_analysis/2.analysis/3-3v3.all_drivergenes_list.Rdata")
+
+
+#目标数据框1
+#gene gene区间  pos1 pos2
+gr_bedpes <- GRanges(
+  seqnames = bedpe_986$CHROM_A,
+  ranges = IRanges(start = bedpe_986$START_A+1,end = bedpe_986$END_A)
+)
+hits_geneflanking_bedpes <- findOverlaps(gr_gene_flankings,gr_bedpes)
+overlap_data <- data.frame(
+  flanking_index = queryHits(hits_geneflanking_bedpes),
+  bedpe_index = subjectHits(hits_geneflanking_bedpes)
+)
+result <- cbind(gene_flanking[overlap_data$flanking_index, ],bedpe_986[overlap_data$bedpe_index, ])
+rheinbay_table1 <- result
+save(rheinbay_table1,file="~/1000_noncoding/3.SV_analysis/2.analysis/5-1.rheinbay_table1.Rdata")
+
+#目标数据框2
+#gene 重排patner反复出现的区间 反复出现的次数
+load("~/1000_noncoding/3.SV_analysis/2.analysis/5-1.rheinbay_table1.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/ensembl_canonical_transcripts_bed4.Rdata")
+
+#函数，输入基因得到相应数据
+get_merge_candidate <- function(gene){
+library(GenomicRanges)
+library(dplyr)
+df <- rheinbay_table1[rheinbay_table1$gene_name==gene,]
+#得到所有的候选1Mb区间
+if(1){
+  # 创建一个空的数据框来存储新的区间
+  candidate_hotspot_region <- data.frame(chr = character(), start = numeric(), end = numeric(), gene_name = character(), stringsAsFactors = FALSE)
+  row_index <- 1
+  start <- df$START_B
+  end <- df$END_B
+  chr <- df$CHROM_B
+  gene_name <- df$gene_name
+  upstream_start <- rep(NA,nrow(df))
+  upstream_end <- rep(NA,nrow(df))
+  downstream_start <- rep(NA,nrow(df))
+  downstream_end <- rep(NA,nrow(df))
+
+  if(nrow(df)>0){
+  for (i in 1:nrow(df)) {
+
+    # 上游1Mb
+    upstream_start[i] <- start[i] - 1000000
+    upstream_end[i] <- start[i]+1
+    if (upstream_start[i] < 0) upstream_start[i] <- 0  # 防止负值
+
+    # 下游1Mb
+    downstream_start[i] <- end[i]-1
+    downstream_end[i] <- end[i] + 1000000
+
+  }
+  candidate_hotspot_region_upstream <- data.frame(chr,start=upstream_start,end=upstream_end,gene_name)
+  candidate_hotspot_region_downstream <- data.frame(chr,start=downstream_start,end=downstream_end,gene_name)
+  candidate_hotspot_region <- rbind(candidate_hotspot_region_upstream,candidate_hotspot_region_downstream) %>%
+    arrange(chr,start,gene_name)
+
+#与patner overlap得到overlap样本数>=2的区间，以及n
+gr_candidate_hotspot_region <- GRanges(
+  seqnames = candidate_hotspot_region$chr,
+  ranges = IRanges(start = candidate_hotspot_region$start+1, end = candidate_hotspot_region$end)
+)
+gr_patners <- GRanges(
+  seqnames = df$CHROM_B,
+  ranges = IRanges(start = df$START_B+1,end = df$END_B)
+)
+hits_chr_patners <- findOverlaps(gr_candidate_hotspot_region,gr_patners)
+overlap_data <- data.frame(
+  chr_index = queryHits(hits_chr_patners),
+  partner_index = subjectHits(hits_chr_patners)
+)
+result <- cbind(candidate_hotspot_region[overlap_data$chr_index, ],
+                df[overlap_data$partner_index,-c(1,2,3) ])
+colnames(result)[1:3] <- c("chr_candidate","start_candidate","end_candidate")
+result <- result[,-c(5)]
+result <- result%>%
+  group_by(chr_candidate,start_candidate,end_candidate) %>%
+  mutate(distinct_samples = n_distinct(SAMPLE)) %>%
+  ungroup() %>%
+  filter(distinct_samples>1)
+#把重叠的candidate区间合并起来
+gr_merge <- GRanges(seqnames = result$chr_candidate,
+                    ranges = IRanges(start = result$start_candidate,
+                                     end = result$end_candidate))
+gr_merge <- GenomicRanges::reduce(gr_merge)
+gr_patners <- GRanges(
+  seqnames = df$CHROM_B,
+  ranges = IRanges(start = df$START_B+1,end = df$END_B)
+)
+hits_merge_patners <- findOverlaps(gr_merge,gr_patners)
+overlap_data <- data.frame(
+  merge_index = queryHits(hits_merge_patners),
+  partner_index = subjectHits(hits_merge_patners)
+)
+merge_hotspot_region=data.frame(chr_merge=gr_merge@seqnames,start_merge=gr_merge@ranges)
+result1 <- cbind(merge_hotspot_region[overlap_data$merge_index, ],
+                df[overlap_data$partner_index,-c(1,2,3) ])
+colnames(result1)[1:3] <- c("chr_merge","start_merge","end_merge")
+result1 <- result1%>%
+  group_by(chr_merge,start_merge,end_merge) %>%
+  mutate(distinct_samples = n_distinct(SAMPLE)) %>%
+  mutate(merge_width=(max(END_B)-min(START_B))) %>%#重新算一下cluster的长度
+  ungroup()
+
+result1 <- result1 %>%
+  left_join(ensembl_canonical_transcripts_bed4,by=("gene_name")) %>%
+  select(1:4,6:28,5) %>%
+  mutate(same_chr=ifelse(chr==chr_merge,"yes","no"))
+return(result1)}else{return(NULL)}
+}
+}
+
+#把癌基因的表格整理起来，再画个图；这些SV cluster和表达的关系在5-2里面去写
+
+cl <- makeCluster(48)
+clusterExport(cl,varlist = c("rheinbay_table1","ensembl_canonical_transcripts_bed4"))
+list_cancergene_svcluster <- parLapply(cl,all_drivergenes_list, get_merge_candidate)
+stopCluster(cl)
+
+#去掉其中为NULL的元素
+list_cancergene_svcluster <- Filter(Negate(is.null), list_cancergene_svcluster)
+df_cancergene_svcluster <- do.call(rbind,list_cancergene_svcluster)
+save(df_cancergene_svcluster,file="~/1000_noncoding/3.SV_analysis/2.analysis/5-1_df_cancergene_svcluster.Rdata")
+sessionInfo()
+
+#按照candidate统计一下
+load("~/1000_noncoding/3.SV_analysis/2.analysis/5-1_df_cancergene_svcluster.Rdata")
+df <- df_cancergene_svcluster[,c(1:3,23,24,27,28)]
+df <- unique(df) #一共是2515个cancer gene-related cluster
+
+#绘制柱状图-Intrachromosome
+df1 <- df %>%
+  filter(distinct_samples>=5)%>% #1%
+  filter(merge_width>10) %>%
+  mutate(n_per_l = (distinct_samples/merge_width*1000000 )) %>%
+  arrange(desc(n_per_l))
+df1_plot <- df1[1:10,]
+df1_plot$gene_name <- factor(df1_plot$gene_name,levels = df1_plot$gene_name[10:1])
+df1_plot$x <- paste0(df1_plot$gene_name,"(N=",df1_plot$distinct_samples,")") #设置x轴标签
+df1_plot$pos <- paste0("Partner region:",df1_plot$chr_merge," ",
+                       round(df1_plot$start_merge/1000000,1),"Mb",
+                       "-",
+                       round(df1_plot$end_merge/1000000,1),"Mb")#设置坐标标签
+p5_1_1 <- ggplot(df1_plot,aes(x=gene_name,y=n_per_l)) +
+  geom_bar(stat = "identity",fill="#820938")+
+  geom_text(aes(label = pos[10:1]),hjust=-0.1,vjust = 0.3) +
+  labs(x="",y="Number_of_samples/Mb")+
+  theme_bw()+
+  ylim(-5,120)+
+  scale_x_discrete(
+    labels = df1_plot$x[10:1],
+  ) +
+  coord_flip() +
+  ggtitle("High-frequency Juxtaposition",
+          subtitle = "(Breakpoints Flanking Transcript)")+
+  theme(
+    legend.position = "none",
+    legend.title = element_blank(),
+    legend.key.size = unit(3, "pt"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x =  element_text(size = 10,hjust = 1,face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12, face = "bold")
+  )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#绘制柱状图-Interchromosome
+df1 <- df %>%
+  filter(same_chr=="no") %>%
+  mutate(n_per_l = (distinct_samples/start_merge.width)*1000000 ) %>%
+  arrange(desc(n_per_l))
+source("~/1000_noncoding/4.ASE/2.analysis/theme_bipin.r")
+df1_plot <- df1[1:20,]
+df1_plot$symbol[8] <- "CDH4(cluster1)"
+df1_plot$symbol[12] <- "CDH4(cluster2)"
+p5_1_2 <- ggdf1_plotp5_1_1 <- ggplot(df1_plot,aes(x=symbol,y=n_per_l)) +
+  geom_bar(stat = "identity")+
+  labs(x="",y="Number_of_samples/Mb")+
+  theme_bipin()+
+  scale_fill_manual(values = c("Candidates" ="#CD3B42" ,
+                               "Possible Candidates" = "#820938"))+
+  scale_x_discrete(limits = df1_plot$symbol) +
+  theme(
+    legend.position = "none",
+    legend.title = element_blank(),
+    legend.key.size = unit(3, "pt"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x =  element_text(size = 10,angle = 90,hjust = 1,face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold")
+  )
+
+```
+                                                    (Result)
+The output from FASTQC and multiqc look good!  Proceeding to differential expression analysis of unicorn horn between activated and unactivated samples.
