@@ -1,0 +1,315 @@
+# TERT SV断点与TSS的距离和表达的关系探索分析   (What)
+
+* Aug 21, 2025                                     (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis          (Where)
+* 首先可以看下大概离转录起始位点多远的断点会对基因的表达产生比较大的影响,其次
+就是看下那些SV引起基因表达升高的样本中基因的表达和拷贝数的相关性如何，
+按照Peifer那篇文章，一些基因附近的SV导致基因的高表达并且在这些样本中这些基因的表达和拷贝数
+的相关性很小，其实就是提示增强子劫持(Why)
+
+
+## 代码如下                                          (How)
+
+```
+##此脚本用于分析TERT SV与TSS的距离和TERT表达之间的关系
+
+##loading packages
+library(dplyr)
+library(GenomicRanges)
+library(ggplot2)
+library(ggpubr)
+library(survminer)
+library(survival)
+
+##loading files
+load("~/1000_noncoding/3.SV_analysis/2.analysis/ensembl_canonical_transcripts_bed4.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/3-3_absolute_cn_long.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/bedpe_986.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/6-1.lc_1019_expr_long.Rdata")
+clin <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/clin_info_1000_with_pathway_with_gene.txt")
+
+##整理数据框1 Peifer table1(包含上下游500kb的所有突变)
+#distance_SV2TSS relative_location(upstr,dnstr,inside,complex?) TERT_exprscore
+
+##首先需要处理一下bedpe文件
+#对于DUP、DEL、INV，需要交换A和B的位置多生成一行，最后再去掉重复，否则overlap的时候B不能被overlap
+#BND本来就是这样的，可以不用管
+new_bedpe_986 <- bedpe_986 %>%
+  filter(TYPE %in% c("DUP", "DEL", "INV")) %>%
+  mutate(
+    CHROM_A = CHROM_B,
+    START_A = START_B,
+    END_A = END_B,
+    CHROM_B = CHROM_A,
+    START_B = START_A,
+    END_B = END_A
+  ) %>%
+  bind_rows(bedpe_986) # 合并旧行和新生成的行
+
+
+TERT_bed <- ensembl_canonical_transcripts_bed4[ensembl_canonical_transcripts_bed4$gene_name=="TERT",]
+TERT_plus_flanking_bed <- ensembl_canonical_transcripts_bed4 %>%
+  filter(gene_name=="TERT") %>%
+  mutate(start=start-500000,end=end+500000)
+
+gr_tert_plus_flanking <- GRanges(seqnames = TERT_plus_flanking_bed$chr,
+                                 ranges = IRanges(start = TERT_plus_flanking_bed$start+1,
+                                                  end=TERT_plus_flanking_bed$end))
+gr_bedpes <- GRanges(
+  seqnames = new_bedpe_986$CHROM_A,
+  ranges = IRanges(start = new_bedpe_986$START_A+1,end = new_bedpe_986$END_A)
+)
+hits_tertplusflanking_bedpes <- findOverlaps(gr_tert_plus_flanking,gr_bedpes)
+overlap_data <- data.frame(
+  tert_index = queryHits(hits_tertplusflanking_bedpes),
+  bedpe_index = subjectHits(hits_tertplusflanking_bedpes)
+)
+result <- cbind(TERT_plus_flanking_bed[overlap_data$tert_index, ],new_bedpe_986[overlap_data$bedpe_index, ])
+
+df <- result %>%
+  select(gene_name,CHROM_A,START_A,END_A,SAMPLE,INFO,ID) %>%
+  mutate(distance_SV2TSS=TERT_bed$end-START_A) %>%
+  mutate(relative_location=ifelse(distance_SV2TSS<0,"upstream",
+                                  ifelse(41901>distance_SV2TSS & distance_SV2TSS>0,
+                                         "gene_body","downstream"))) %>%
+  mutate(Sample=SAMPLE,symbol=gene_name) %>%
+  left_join(lc_1019_expr_long,by=c("Sample","symbol")) %>%
+  select(-Sample,-symbol) %>%
+  #每个样本仅保留到TSS距离最小者
+  group_by(SAMPLE) %>%
+  filter(abs(distance_SV2TSS) == min(abs(distance_SV2TSS))) %>%
+  ungroup() %>%
+  mutate(Gene=gene_name,Sample=SAMPLE) %>%
+  left_join(absolute_cn_long,by=c("Gene","Sample")) %>%
+  select(-Sample,-Gene,-Cytoband)
+save(df,file="~/1000_noncoding/3.SV_analysis/2.analysis/6_1.tert_sv_df")
+##得到表达的长数据
+if(0){
+lc_1019_expr_long <- expr_allsamples %>%
+  mutate(gene_name=rownames(expr_allsamples)) %>%
+  separate(gene_name,into = c("ensemble_id", "symbol"), sep = "\\|") %>%
+  pivot_longer(1:1019,names_to = "Sample",values_to = "deseq2_normalized_counts")
+save(lc_1019_expr_long,file="~/1000_noncoding/3.SV_analysis/2.analysis/6-1.lc_1019_expr_long.Rdata")
+}
+
+##########绘图
+load("~/1000_noncoding/3.SV_analysis/2.analysis/6_1.tert_sv_df")
+
+##绘制第一张图-到TSS距离和表达的关系 outlier实际上距离不会超过100kb的
+df_plot <- df %>%
+  select(SAMPLE,distance_SV2TSS,deseq2_normalized_counts,relative_location) %>%
+  mutate(distance=distance_SV2TSS/1000,exprscore=log2(deseq2_normalized_counts))
+Q3 <- quantile(lc_1019_expr_long$deseq2_normalized_counts[lc_1019_expr_long$symbol=="TERT"], 0.75)  # 计算四分位数
+IQR_value <- IQR(lc_1019_expr_long$deseq2_normalized_counts[lc_1019_expr_long$symbol=="TERT"])      # 计算四分位距
+upper_bound <- Q3 + 1.5 * IQR_value  # 计算离群值的上界
+p6_1_1 <- ggplot(df_plot, aes(x = distance, y = exprscore,colour = relative_location)) +
+  geom_point() +
+  scale_x_continuous(name = "Distance(TSS-POS_of_Breakpoint)",labels = function(x) paste(x, "kb")) +  # 设置横轴标题
+  scale_y_continuous(name = "TERT Log2(deseq2_normalized_counts)") +  # 设置纵轴标题
+  scale_color_manual(values = c("downstream" = "#4D779B", "gene_body" = "#FFC04D","upstream"="#CD3842"))+
+  theme_bw()  + # 使用简洁的主题
+  geom_hline(yintercept = log2(upper_bound), linetype = "dashed", color = "red") +  # 添加y轴辅助线
+  annotate("text", x = -150, y = log2(upper_bound), label = "outlier threshold", color = "grey", size = 5, hjust = 0.25,vjust=1) +# 添加辅助线标签
+  theme(legend.position = c(0.85, 0.85))+
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),  # 标题加粗并增大字体
+    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
+  )
+
+##绘制第二张图，所有TERT表达与拷贝数的关系，对于正负100kb内的断点，表达与拷贝数的关系
+#所有的
+df_plot <- lc_1019_expr_long %>%
+  filter(symbol=="TERT") %>%
+  mutate(Gene=symbol) %>%
+  left_join(absolute_cn_long,by=c("Sample","Gene"))
+df_plot <- na.omit(df_plot)
+
+cor_test <- cor.test(log2(df_plot$deseq2_normalized_counts), df_plot$Absolute_CN)
+correlation <- cor_test$estimate  # 相关系数
+p_value <- cor_test$p.value      # p值
+
+p6_1_2 <- ggplot(df_plot, aes(x = Absolute_CN, y = log2(deseq2_normalized_counts))) +
+  geom_point(color = "#4D779B") +  # 绘制散点
+  geom_smooth(method = "lm", se = FALSE, color = "red") +  # 拟合直线
+  annotate("text", x = 20, y = 10,
+           label = paste("Correlation: ", round(correlation, 2),
+                         "\np-value: ", format(p_value, digits = 3)),
+           color = "black", size = 5) +  # 显示相关系数p
+  labs(title = "Correlation between CN and TERT expression score", x = "Copy Number", y = "Log2(deseq2_normalized_counts)") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),  # 标题加粗并增大字体
+    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
+  )
+##100kb以内的
+df_plot <- df %>%
+  filter(abs(distance_SV2TSS)<100000) %>%
+  select(Absolute_CN,deseq2_normalized_counts)
+cor_test <- cor.test(log2(df_plot$deseq2_normalized_counts), df_plot$Absolute_CN)
+correlation <- cor_test$estimate  # 相关系数
+p_value <- cor_test$p.value      # p值
+
+p6_1_3 <- ggplot(df_plot, aes(x = Absolute_CN, y = log2(deseq2_normalized_counts))) +
+  geom_point(color = "#4D779B") +  # 绘制散点
+  geom_smooth(method = "lm", se = FALSE, color = "red") +  # 拟合直线
+  annotate("text", x = 20, y = 10,
+           label = paste("Correlation: ", round(correlation, 2),
+                         "\np-value: ", format(p_value, digits = 3)),
+           color = "black", size = 5) +  # 显示相关系数p
+  labs(title = "Correlation between CN and TERT expression score(in SV samples)", x = "Copy Number", y = "Log2(deseq2_normalized_counts)") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),  # 标题加粗并增大字体
+    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
+  )
+
+##绘制第三张图分类箱线图
+SV_genebody_samples <- df$SAMPLE[df$relative_location=="gene_body"]
+SV_dnstr100kb_samples <- df$SAMPLE[abs(df$distance_SV2TSS) < 100000 & df$relative_location=="downstream"]
+SV_upstr100kb_samples <- df$SAMPLE[abs(df$distance_SV2TSS) < 100000 & df$relative_location=="upstream"]
+df_plot <- lc_1019_expr_long %>%
+  filter(symbol=="TERT") %>%
+  mutate(Gene=symbol) %>%
+  left_join(absolute_cn_long,by=c("Sample","Gene"))
+df_plot <- df_plot %>%
+  mutate(group=ifelse(Sample %in% SV_genebody_samples,"TERT sv",
+                ifelse(Sample %in% SV_upstr100kb_samples,"TERT upstream 100kb sv",
+                    ifelse(Sample %in% SV_dnstr100kb_samples,"TERT downstream 100kb sv",
+                           ifelse(Absolute_CN>=4,"TERT amp","TERT wt"))))) %>%
+  filter(!is.na(group)) %>%
+  group_by(group) %>%
+  mutate(group_n = n()) %>%
+  ungroup()
+df_plot$group <- factor(df_plot$group,levels = c("TERT wt","TERT amp",
+                                                 "TERT downstream 100kb sv",
+                                                 "TERT sv",
+                                                 "TERT upstream 100kb sv"))
+p <- ggplot(df_plot,aes(x=group,y=log2(deseq2_normalized_counts),color=group)) +
+  geom_boxplot()+
+  theme_bw()+
+  scale_color_manual(values = c("TERT wt"="#606060","TERT amp"="#341831",
+                                "TERT downstream 100kb sv"="#4D779B",
+                                "TERT sv"= "#FFC04D",
+                                "TERT upstream 100kb sv"="#CD3842"))+
+  scale_x_discrete(
+    labels = c(paste0("TERT wt\n(n=",unique(df_plot$group_n[df_plot$group=="TERT wt"]),")"),
+               paste0("TERT amp\n(n=",unique(df_plot$group_n[df_plot$group=="TERT amp"]),")"),
+               paste0("TERT downstream 100kb sv\n(n=",unique(df_plot$group_n[df_plot$group=="TERT downstream 100kb sv"]),")"),
+               paste0("TERT sv\n(n=",unique(df_plot$group_n[df_plot$group=="TERT sv"]),")"),
+               paste0("TERT upstream 100kb sv\n(n=",unique(df_plot$group_n[df_plot$group=="TERT upstream 100kb sv"]),")")
+              )
+  ) +
+  theme(legend.position="none")+
+  ylim(0,ceiling(max(log2(df_plot$deseq2_normalized_counts))+4.5))+
+  labs(x="",y="TERT Expression Score")+
+  theme(
+    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x = element_text(size = 10, face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
+  )
+my_comparisons <- list(c("TERT wt","TERT amp"), c("TERT wt", "TERT downstream 100kb sv"),
+                       c("TERT wt","TERT sv"),c("TERT wt","TERT upstream 100kb sv"))
+p1 <- p+stat_compare_means(comparisons = my_comparisons,
+                           label.y = c(max(log2(df_plot$deseq2_normalized_counts))-0.5,
+                              max(log2(df_plot$deseq2_normalized_counts))+0.5,
+                                  max(log2(df_plot$deseq2_normalized_counts))+1.5,
+                                      max(log2(df_plot$deseq2_normalized_counts))+2.5
+                                  )) #默认就是wilconx秩和检验
+
+p6_1_4 <- p1
+
+##绘制第四张图-生存曲线 KP+Cox回归 1-2 h
+#先看下TERT表达和预后的关系
+#在1000_noncoding/results 目录里面
+#OS有趋势但是p=0.07,RFS则是强相关p很小
+
+#然后看下sv和预后的关系-患者数太少分不开
+#直接套用分类箱线图的整理表格代码，再把临床信息补进来就可以了
+SV_genebody_samples <- df$SAMPLE[df$relative_location=="gene_body"]
+SV_dnstr100kb_samples <- df$SAMPLE[abs(df$distance_SV2TSS) < 100000 & df$relative_location=="downstream"]
+SV_upstr100kb_samples <- df$SAMPLE[abs(df$distance_SV2TSS) < 100000 & df$relative_location=="upstream"]
+df_plot <- lc_1019_expr_long %>%
+  filter(symbol=="TERT") %>%
+  mutate(Gene=symbol) %>%
+  left_join(absolute_cn_long,by=c("Sample","Gene")) %>%
+  mutate(group=ifelse(Sample %in% SV_genebody_samples,"TERT sv",
+                      ifelse(Sample %in% SV_upstr100kb_samples,"TERT upstream 100kb sv",
+                             ifelse(Sample %in% SV_dnstr100kb_samples,"TERT downstream 100kb sv",
+                                    ifelse(Absolute_CN>=4,"TERT amp","TERT wt"))))) %>%
+  filter(!is.na(group)) %>%
+  group_by(group) %>%
+  mutate(group_n = n()) %>%
+  ungroup() %>%
+  mutate(Sample_ID=Sample) %>%
+  left_join(clin,by=c("Sample_ID"))
+
+##sv细分
+gene <- "TERT"
+#os
+km_os<-survfit(Surv(OS,OS_E)~group,data = df_plot)
+p6_1_5 <- ggsurvplot(km_os,
+                conf.int=F, #是否显示生存率的95%CI
+                #risk.table=T,#显示风险表
+                palette="lancet", #柳叶刀配色
+                title=paste0(gene,"_OS"), #大标题
+                #risk.table.height = 0.25,#风险表的高度比例
+                pval=T,
+                pval.method=T
+)
+#rfs
+km_rfs<-survfit(Surv(RFS,RFS_E)~group,data = df_plot)
+p6_1_6 <- ggsurvplot(km_rfs,
+                 conf.int=F, #是否显示生存率的95%CI
+                 #risk.table=TRUE,#显示风险表
+                 palette="lancet", #柳叶刀配色
+                 title=paste0(gene,"_RFS"), #大标题
+                 #risk.table.height = 0.25, #风险表的高度比例
+                 pval=T,
+                 pval.method=T)
+##sv合并
+df_plot <- df_plot %>%
+mutate(group=ifelse(group %in% c("TERT downstream 100kb sv",
+                                     "TERT sv",
+                                     "TERT upstream 100kb sv"),"TERT sv(genebody/upstream/downstream)",group))
+#os
+km_os<-survfit(Surv(OS,OS_E)~group,data = df_plot)
+p6_1_7 <- ggsurvplot(km_os,
+                conf.int=F, #是否显示生存率的95%CI
+                #risk.table=T,#显示风险表
+                palette="lancet", #柳叶刀配色
+                title=paste0(gene,"_OS"), #大标题
+                #risk.table.height = 0.25,#风险表的高度比例
+                pval=T,
+                pval.method=T
+)
+#rfs
+km_rfs<-survfit(Surv(RFS,RFS_E)~group,data = df_plot)
+p6_1_8 <- ggsurvplot(km_rfs,
+                 conf.int=F, #是否显示生存率的95%CI
+                 #risk.table=TRUE,#显示风险表
+                 palette="lancet", #柳叶刀配色
+                 title=paste0(gene,"_RFS"), #大标题
+                 #risk.table.height = 0.25, #风险表的高度比例
+                 pval=T,
+                 pval.method=T)
+
+##然后看下邓师兄给的文章 4h 把可以做成PPT的地方记下来 晚上还要出去吃饭我勒个豆
+##待补充，ASE图
+
+##7.26
+##下面这两个事情周日上午起来有精力的话做掉吧
+##文章如果看累了就把sv cnv一致性的分析做了 2h
+##然后把Fujimoto和SRJ需要改的地方重新弄一下 2h
+```
+                                                    (Result)
+The output from FASTQC and multiqc look good!  Proceeding to differential expression analysis of unicorn horn between activated and unactivated samples.

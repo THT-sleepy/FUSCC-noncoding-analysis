@@ -1,0 +1,99 @@
+# 对SV引起的基因表达变化绘制火山图 (What)
+
+* Aug 21, 2025            (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis    (Where)
+* 想通过火山图找一下enhancer-hijacking的candidates  (Why)
+I want to make sure that the quality of my reads obtained from the Illumina Novaseq look good before proceeding.
+
+
+## 代码如下                                   (How)
+
+```
+####3-5 Fujimoto-火山图##
+
+##loading packages
+library(tidyverse)
+library(ggthemes)
+library(ggsci)
+
+##loading files
+load("~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_table4.Rdata")
+#得到癌基因list
+if(1){
+  cancer_gene_737_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/737 cancer genes by pcawg.csv"
+  lung_drivers_df_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/20220203_lung_drivers.csv"
+  cosmic_census_cancer_gene_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/Cancer Gene Census v100.tsv"
+  oncokb_drivergenes_list_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/oncokb_cancerGeneList_2024_10_24.tsv"
+  OncoKB_driver <- fread(oncokb_drivergenes_list_filepath)
+  CGC_driver <- fread(cosmic_census_cancer_gene_filepath)
+  PCAWG_driver <- fread(cancer_gene_737_filepath)
+  names(PCAWG_driver) <- "Gene_Symbol"
+  lung_driver <- fread(lung_drivers_df_filepath)
+  all_drivergenes_list <- union(OncoKB_driver$`Hugo Symbol`,CGC_driver$`Gene Symbol`)
+  all_drivergenes_list  <- union(all_drivergenes_list,PCAWG_driver$Gene_Symbol)
+  all_drivergenes_list <- union(all_drivergenes_list,lung_driver$Gene_Symbol)
+  all_drivergenes_df <- data.frame(gene=all_drivergenes_list) %>%
+    mutate(`Gene Symbol`=gene,`Hugo Symbol`=gene) %>%
+    left_join(OncoKB_driver,by=c("Hugo Symbol")) %>%
+    left_join(CGC_driver,by=c("Gene Symbol")) %>%
+    select(gene,`Is Oncogene`,`Is Tumor Suppressor Gene`,`Role in Cancer`)
+
+}
+
+##准备绘图用的数据框,只看癌基因
+## 筛选阈值
+lfc=0.8
+pval=0.05
+df <- fujimoto_table4 %>%
+  #只要癌基因
+  filter(!is.na(cnnormal_expr_q_cancergene)) %>%
+  #得到基因是不是癌基因还是抑癌基因，用于后面标记
+  mutate(gene=gene_name) %>%
+  left_join(all_drivergenes_df,by=c("gene")) %>%
+  select(-gene) %>%
+  #去掉<50肿瘤中表达的基因
+  filter(expr_over_50==T) %>%
+  #去掉cnnormal_expr_p为NA的基因
+  filter(!is.na(cnnormal_expr_p)) %>%
+  #得到绘图用的几项
+  mutate(gene_id=gene_name,
+         log2FoldChange=as.numeric(cnnormal_expr_log2FC),
+         p=as.numeric(cnnormal_expr_p),
+         padj=cnnormal_expr_q_cancergene) %>%
+  mutate(color=case_when(
+    abs(log2FoldChange)>lfc & p>pval ~ "grey",
+    abs(log2FoldChange)<lfc & p<pval ~ "grey",
+    #abs(log2FoldChange)>lfc & p<pval ~ pal_nejm("default", alpha = 0.4)(8)[1],
+    abs(log2FoldChange)>lfc & p<pval ~ "#ED8172",
+    abs(log2FoldChange)<lfc & p>pval ~ "grey"
+  ),
+  plot_label=case_when(
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange > 0 & `Is Oncogene`=="Yes"~ gene_id,
+    abs(log2FoldChange)>lfc & p<pval & log2FoldChange < 0 & `Is Tumor Suppressor Gene`=="Yes" ~ gene_id
+  )
+  ) %>%
+  select(gene_id,log2FoldChange,p,padj,
+         `Is Oncogene`,`Is Tumor Suppressor Gene`,n_samples,
+         color,plot_label)
+
+##绘图
+#导入自定义主题
+source("~/1000_noncoding/3.SV_analysis/2.analysis/theme_bipin.r")
+p5_1 <- ggplot(df,aes(log2FoldChange, -log10(p), fill=color,label=plot_label)) +
+  geom_point(alpha=1,size=4,pch=21) +
+  #geom_text(hjust=-0.3, vjust=0) +
+  scale_fill_identity() +
+  labs(x=expression(Log[2]~fold~change), y=expression(-~Log[10]~p~value)) +
+  geom_vline(xintercept=c(-lfc,lfc), linetype=2) + geom_hline(yintercept=-log10(pval), linetype=5) +
+  ggrepel::geom_label_repel(alpha=1,family="sans",color="black",fill="white",face="italicize",max.overlaps = Inf) +
+  #scale_y_log10() +
+  xlim(-3,3) +
+  theme_bipin() +
+  theme(axis.title = element_text(size=16),
+        text = element_text(family="sans"))
+
+
+#ggsave("./Fig/volcano.pdf",width=6,height=6)
+```
+                                                    (Result)
+The output from FASTQC and multiqc look good!  Proceeding to differential expression analysis of unicorn horn between activated and unactivated samples.

@@ -1,0 +1,34 @@
+# 得到经典转录本的坐标文件            (What)
+
+* Aug 21, 2025                                    (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis    (Where)
+* 见标题                                                   (Why)
+
+
+
+## 代码如下                                         (How)
+
+```
+######此脚本用于得到经典转录本的坐标文件
+
+###loading packages
+library(data.table)
+library(dplyr)
+
+###loading files
+ensembl_gtf <- fread("~/1000_noncoding/3.SV_analysis/1.resources/gencode.v47.basic.annotation.gtf.gz")
+names(ensembl_gtf)[c(1,4,5,7)] <- c("chr","start","end","strand")
+ensembl_gtf <- ensembl_gtf %>%
+  mutate(gene_name = str_extract(V9, 'gene_name "([^"]+)"')) %>%
+  mutate(gene_name = str_replace(gene_name, 'gene_name "', '')) %>%
+  mutate(gene_name = str_replace(gene_name, '"', '')) %>%
+  mutate(level = str_extract(V9, "level (\\d+)"))
+ensembl_canonical_transcripts <- ensembl_gtf %>%
+  filter(str_detect(V9,"canonical"),V3=="transcript") %>% #留下canonical的转录本
+  filter(!str_detect(V9,"pseudo")) %>% #去掉假基因
+  filter(level %in% c("level 1","level 2")) %>% #保留level <=2 的转录本
+  select(gene_name,chr,start,end,strand)
+ensembl_canonical_transcripts_bed4 <- ensembl_canonical_transcripts
+save(ensembl_canonical_transcripts_bed4,file="~/1000_noncoding/3.SV_analysis/2.analysis/ensembl_canonical_transcripts_bed4.Rdata")
+```
+                                                    (Result)
