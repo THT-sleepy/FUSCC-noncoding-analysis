@@ -1,0 +1,65 @@
+# 得到位于fragile site的genelist             (What)
+
+* Aug 23, 2025                                   (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis     (Where)
+* 脆弱位点的高频SV不一定反映selection                       (Why)
+
+
+## 代码                                   (How)
+
+```
+##得到位于fragile site的genelist##
+#需要一个所有fragile sites gr对象和一个所有gene的gr对象
+
+##loading packages
+library(GenomicRanges)
+library(tidyverse)
+
+##step1 得到所有fragile sites的gr对象
+if(1){
+folder_path <- "~/1000_noncoding/3.SV_analysis/1.resources/fragile_site_bed"
+file_list <- list.files(path = folder_path, pattern = "\\.bed$", full.names = TRUE)
+fragile_bed <- lapply(file_list, function(x) read.delim(x,header=F)) %>%
+  bind_rows()
+colnames(fragile_bed) <- c("chr","start","end","gene","other","strand")
+fragile_bed <- fragile_bed %>%
+  mutate(chr=ifelse(chr=="chrx","chrX",chr))
+save(fragile_bed,file="~/1000_noncoding/3.SV_analysis/fragile_sites_bed.Rdata")
+}
+load("~/1000_noncoding/3.SV_analysis/fragile_sites_bed.Rdata")
+#bed 左+1
+gr_fragile <- GRanges(seqnames=fragile_bed$chr,
+                      ranges = IRanges(start = fragile_bed$start+1,
+                                       end = fragile_bed$end))
+
+##step2 得到所有gene的gr对象
+if(0){
+all_gene_bed <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/all_gene_hg38.bed4",sep=" ",header=F)
+colnames(all_gene_bed) <- c("chr","start","end","symbol")
+save(all_gene_bed,file="~/1000_noncoding/3.SV_analysis/all_gene_bed4.Rdata")
+}
+load("~/1000_noncoding/3.SV_analysis/2.analysis/all_gene_bed4.Rdata")
+gr_gene <- GRanges(seqnames=all_gene_bed$chr,
+                   ranges = IRanges(start = all_gene_bed$start+1,
+                                    end = all_gene_bed$end))
+
+##findoverlap得到位于fragile sites的genelist
+hits_fragile_gene <- findOverlaps(gr_fragile,gr_gene)
+genevec <- all_gene_bed$symbol[subjectHits(hits_fragile_gene)]
+save(genevec,file="3-2补充_genevec.Rdata")
+
+##看一下高频区域涉及的癌基因有哪些是fragile sites的
+High_SV_region_cancergenes <- c("ALK","EML4","TRIP13","TERT","SDHA",
+                                "CDH10","CTNND2","EEF1A1","MTAP",
+                                "CDKN2A","CDKN2B","EGFR","PTPRD",
+                                "TG","MDM2","FRS2","CDK4","RAP1B",
+                                "PTPRB","NKX2-1","CHEK2","XBP1",
+                                "CDH4","PTK6","RTEL1","ARFRP1"
+                                )
+intersect(High_SV_region_cancergenes,genevec)
+
+
+
+
+```
+                                                    (Result)
