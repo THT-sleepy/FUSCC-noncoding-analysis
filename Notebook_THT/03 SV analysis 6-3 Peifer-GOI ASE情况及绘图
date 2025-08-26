@@ -1,0 +1,580 @@
+# 分析下候选增强子劫持事件靶基因的ASE情况            (What)
+
+* Aug 25, 2025                                     (When)
+* biotrainee  ~/1000_noncoding/3.SV_analysis/2.analysis (Where)
+* 就如果是真的enhancer hijacking就应该是ASE嘛,但事实上大多数样本cn也非常高，也不能排除cn引起的ASE         (Why)
+
+##代码                                       (How)
+
+```
+##此脚本用于分析发生sv-enhancer hijacking的样本是否是Allele-specific expression
+##需要注意的是用的是基于exon snp的ASE数据，后面有可能改为全转录本的
+
+
+##loading packages
+library(dplyr)
+library(GenomicRanges)
+library(purrr)
+library(vcfR)
+library(patchwork)
+
+##loading files
+#genes_expr_over10percentT
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/3-3.genes_expr_over10percentT.RData")
+
+#tnmatch
+tnmatch <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/config_TNmatch_986",header=F,sep=" ")
+colnames(tnmatch) <- c("tumor_id","normal_id")
+
+#oncogene_list
+if(1){
+  oncokb_drivergenes_list_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/oncokb_cancerGeneList_2024_10_24.tsv"
+  OncoKB_driver <- fread(oncokb_drivergenes_list_filepath)
+  oncogenes_oncokb_list <- OncoKB_driver$`Hugo Symbol`[OncoKB_driver$`Is Oncogene`=="Yes"]
+}
+oncogene_list <- intersect(genes_expr_over10percentT,oncogenes_oncokb_list)
+#导入exon snp的ASE数据
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/ensembl_canonical_transcripts_bed4.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/3-3_absolute_cn_long.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/bedpe_986.Rdata")
+new_bedpe_986 <- bedpe_986 %>%
+  filter(TYPE %in% c("DUP", "DEL", "INV")) %>%
+  mutate(
+    CHROM_A = CHROM_B,
+    START_A = START_B,
+    END_A = END_B,
+    CHROM_B = CHROM_A,
+    START_B = START_A,
+    END_B = END_A
+  ) %>%
+  bind_rows(bedpe_986) # 合并旧行和新生成的行
+#暂时重新弄一个ASE_data
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/ASE_data.RData") #df
+ASE_data <- df
+if(0){
+  get.sample.oncogene.ASE.OHE <- function(sample){
+    folder_path <- "~/1000_noncoding/4.ASE/1.resources/mbased_results/"
+    file_path <- list.files(path = folder_path, pattern = paste0("^",
+                                                                 sample), full.names = TRUE)
+    df <- read.delim(file_path[1])
+    df <- df %>% mutate(expr_over10 = ifelse(Gene %in% genes_expr_over10percentT,
+                                             TRUE, FALSE), )
+    df$padj_expr_over50[df$expr_over10 == TRUE] <- p.adjust(df$pValueASE[df$expr_over10 ==
+                                                                           TRUE], method = "BH")
+    df$class <- ifelse(df$expr_over10 == FALSE, "expr_less10",
+                       ifelse(df$padj_expr_over50 < 0.1, "ASE", "non-ASE"))
+    df_oncogene <- data.frame(Gene = oncogene_list, ASE_status = "not-tested")
+    df_oncogene <- df_oncogene %>% left_join(df, by = c("Gene")) %>%
+      mutate(ASE_status = ifelse(is.na(class), ASE_status,
+                                 class)) %>% select(Gene, ASE_status, , padj_expr_over50)
+    expr_rownames <- rownames(expr)
+    expr_hugosymbol <- sapply(expr_rownames, function(x) strsplit(x,
+                                                                  "\\|")[[1]][2])
+    get_OHE_E_P <- function(expr, gene, sample, expr_rownames,
+                            expr_hugosymbol) {
+      if (grepl("^ENSG", gene)) {
+        d_f <- expr[grepl(gene, expr_rownames), ]
+      }else {
+        d_f <- expr[expr_hugosymbol == gene, ]
+      }
+      if (nrow(d_f) == 1) {
+        outlier_samples <- apply(d_f, 1, function(x) {
+          stats <- boxplot.stats(x)
+          if (length(stats$out) > 0) {
+            return(names(x)[x %in% stats$out])
+          }
+          else {
+            return(NULL)
+          }
+        })
+        if (sample %in% outlier_samples) {
+          OHE_E = TRUE
+          sample_index <- which(names(d_f) == sample)
+          xi <- d_f[1, sample_index]
+          xi_mean <- mean(t(d_f[1, -sample_index]))
+          xi_sd <- sd(t(d_f[1, -sample_index]))
+          ti <- (xi - xi_mean)/sqrt(xi_sd^2 * (1 + 1/1017))
+          OHE_p <- 1 - pt(ti, 1017)
+        }
+        else {
+          OHE_E = FALSE
+          OHE_p = NA
+        }
+        return(paste(OHE_E, OHE_p, sep = ":"))
+      }
+      else {
+        return(NA)
+      }
+    }
+    vec <- rep(NA, 434)
+    names(vec) <- oncogene_list
+    for (gene in oncogene_list) {
+      vec[gene] <- get_OHE_E_P(expr, gene, sample, expr_rownames,
+                               expr_hugosymbol)
+    }
+    df_OHE <- data.frame(OHE = vec)
+    df_OHE <- df_OHE %>% separate(OHE, into = c("OHE_E", "OHE_p"),
+                                  sep = ":") %>% mutate(Gene = rownames(df_OHE))
+    df <- df_oncogene %>% left_join(df_OHE, by = c("Gene")) %>%
+      mutate(sample = sample)
+    return(df)
+  }
+
+  ##得到数据框Gene,ASE_E,ASE_padj,OHE_E,OHE_p,Sample
+  df <- data.frame(Gene=NA,ASE_status=NA,padj_expr_over10=NA,OHE_E=NA,OHE_p=NA,sample=NA)
+  df <- df[-1,]
+  # 创建一个并行计算的集群
+  cl <- makeCluster(48)  # 使用48个核心
+
+  # 将外部变量传递给每个进程
+  clusterExport(cl, varlist = c("get.sample.oncogene.ASE.OHE","expr",
+                                "genes_expr_over10percentT","oncogene_list"))
+  # 将任务并行化
+  df_list <- parLapply(cl, config_986, function(i) {
+    library(tidyverse)
+    get.sample.oncogene.ASE.OHE(i)
+  })
+
+  # 合并结果
+  df <- do.call(rbind, df_list)
+  names(df) <- c("Gene","ASE_E","ASE_padj","OHE_E","OHE_p","Sample")
+  # 停止集群
+  stopCluster(cl)
+  df$ASE_padj <- ifelse(df$ASE_padj==0,"<1e-06",df$ASE_padj)
+  df$OHE_p <- ifelse(df$OHE_p=="NA",NA,
+                     ifelse(df$OHE_p==0,"<1e-16",df$OHE_p))
+  save(df,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/ASE_data.RData")
+}
+
+##TERT 基本上都是ASE，但大部分都not-tested
+if(1){
+TERT_bed <- ensembl_canonical_transcripts_bed4[ensembl_canonical_transcripts_bed4$gene_name=="TERT",]
+TERT_plus_flanking_bed <- ensembl_canonical_transcripts_bed4 %>%
+  filter(gene_name=="TERT") %>%
+  mutate(start=start-500000,end=end+500000)
+
+gr_tert_plus_flanking <- GRanges(seqnames = TERT_plus_flanking_bed$chr,
+                                 ranges = IRanges(start = TERT_plus_flanking_bed$start+1,
+                                                  end=TERT_plus_flanking_bed$end))
+gr_bedpes <- GRanges(
+  seqnames = new_bedpe_986$CHROM_A,
+  ranges = IRanges(start = new_bedpe_986$START_A+1,end = new_bedpe_986$END_A)
+)
+hits_tertplusflanking_bedpes <- findOverlaps(gr_tert_plus_flanking,gr_bedpes)
+overlap_data <- data.frame(
+  tert_index = queryHits(hits_tertplusflanking_bedpes),
+  bedpe_index = subjectHits(hits_tertplusflanking_bedpes)
+)
+result <- cbind(TERT_plus_flanking_bed[overlap_data$tert_index, ],new_bedpe_986[overlap_data$bedpe_index, ])
+
+df <- result %>%
+  select(gene_name,CHROM_A,START_A,END_A,SAMPLE,INFO,ID) %>%
+  mutate(distance_SV2TSS=TERT_bed$end-START_A) %>%
+  mutate(relative_location=ifelse(distance_SV2TSS<0,"upstream",
+                                  ifelse(41901>distance_SV2TSS & distance_SV2TSS>0,
+                                         "gene_body","downstream"))) %>%
+  mutate(Sample=SAMPLE,symbol=gene_name) %>%
+  left_join(lc_1019_expr_long,by=c("Sample","symbol")) %>%
+  select(-Sample,-symbol) %>%
+  #每个样本仅保留到TSS距离最小者
+  group_by(SAMPLE) %>%
+  filter(abs(distance_SV2TSS) == min(abs(distance_SV2TSS))) %>%
+  ungroup() %>%
+  mutate(Gene=gene_name,Sample=SAMPLE) %>%
+  left_join(absolute_cn_long,by=c("Gene","Sample")) %>%
+  left_join(ASE_data,by = c("Sample","Gene")) %>%
+  select(-Sample,-Gene,-Cytoband)
+TERT_result <- df
+}
+##SLC6A18-全部没有ASE信息
+if(1){
+SLC6A18_bed <- ensembl_canonical_transcripts_bed4[ensembl_canonical_transcripts_bed4$gene_name=="SLC6A18",]
+SLC6A18_plus_flanking_bed <- ensembl_canonical_transcripts_bed4 %>%
+  filter(gene_name=="SLC6A18") %>%
+  mutate(start=start-500000,end=end+500000)
+
+gr_SLC6A18_plus_flanking <- GRanges(seqnames = SLC6A18_plus_flanking_bed$chr,
+                                 ranges = IRanges(start = SLC6A18_plus_flanking_bed$start+1,
+                                                  end=SLC6A18_plus_flanking_bed$end))
+gr_bedpes <- GRanges(
+  seqnames = new_bedpe_986$CHROM_A,
+  ranges = IRanges(start = new_bedpe_986$START_A+1,end = new_bedpe_986$END_A)
+)
+hits_SLC6A18plusflanking_bedpes <- findOverlaps(gr_SLC6A18_plus_flanking,gr_bedpes)
+overlap_data <- data.frame(
+  SLC6A18_index = queryHits(hits_SLC6A18plusflanking_bedpes),
+  bedpe_index = subjectHits(hits_SLC6A18plusflanking_bedpes)
+)
+result <- cbind(SLC6A18_plus_flanking_bed[overlap_data$SLC6A18_index, ],new_bedpe_986[overlap_data$bedpe_index, ])
+
+df <- result %>%
+  select(gene_name,CHROM_A,START_A,END_A,SAMPLE,INFO,ID) %>%
+  mutate(distance_SV2TSS=SLC6A18_bed$end-START_A) %>%
+  mutate(relative_location=ifelse(distance_SV2TSS<0,"upstream",
+                                  ifelse(20808>distance_SV2TSS & distance_SV2TSS>0,
+                                         "gene_body","downstream"))) %>%
+  mutate(Sample=SAMPLE,symbol=gene_name) %>%
+  left_join(lc_1019_expr_long,by=c("Sample","symbol")) %>%
+  select(-Sample,-symbol) %>%
+  #每个样本仅保留到TSS距离最小者
+  group_by(SAMPLE) %>%
+  filter(abs(distance_SV2TSS) == min(abs(distance_SV2TSS))) %>%
+  ungroup() %>%
+  mutate(Gene=gene_name,Sample=SAMPLE) %>%
+  left_join(absolute_cn_long,by=c("Gene","Sample")) %>%
+  left_join(ASE_data,by = c("Sample","Gene")) %>%
+  select(-Sample,-Gene,-Cytoband)
+SLC6A18_result <- df
+}
+##IRX4-全部没有ASE信息
+if(1){
+  IRX4_bed <- ensembl_canonical_transcripts_bed4[ensembl_canonical_transcripts_bed4$gene_name=="IRX4",]
+  IRX4_plus_flanking_bed <- ensembl_canonical_transcripts_bed4 %>%
+    filter(gene_name=="IRX4") %>%
+    mutate(start=start-500000,end=end+500000)
+
+  gr_IRX4_plus_flanking <- GRanges(seqnames = IRX4_plus_flanking_bed$chr,
+                                      ranges = IRanges(start = IRX4_plus_flanking_bed$start+1,
+                                                       end=IRX4_plus_flanking_bed$end))
+  gr_bedpes <- GRanges(
+    seqnames = new_bedpe_986$CHROM_A,
+    ranges = IRanges(start = new_bedpe_986$START_A+1,end = new_bedpe_986$END_A)
+  )
+  hits_IRX4plusflanking_bedpes <- findOverlaps(gr_IRX4_plus_flanking,gr_bedpes)
+  overlap_data <- data.frame(
+    IRX4_index = queryHits(hits_IRX4plusflanking_bedpes),
+    bedpe_index = subjectHits(hits_IRX4plusflanking_bedpes)
+  )
+  result <- cbind(IRX4_plus_flanking_bed[overlap_data$IRX4_index, ],new_bedpe_986[overlap_data$bedpe_index, ])
+
+  df <- result %>%
+    select(gene_name,CHROM_A,START_A,END_A,SAMPLE,INFO,ID) %>%
+    mutate(distance_SV2TSS=IRX4_bed$end-START_A) %>%
+    mutate(relative_location=ifelse(distance_SV2TSS<0,"upstream",
+                                    ifelse(5512>distance_SV2TSS & distance_SV2TSS>0,
+                                           "gene_body","downstream"))) %>%
+    mutate(Sample=SAMPLE,symbol=gene_name) %>%
+    left_join(lc_1019_expr_long,by=c("Sample","symbol")) %>%
+    select(-Sample,-symbol) %>%
+    #每个样本仅保留到TSS距离最小者
+    group_by(SAMPLE) %>%
+    filter(abs(distance_SV2TSS) == min(abs(distance_SV2TSS))) %>%
+    ungroup() %>%
+    mutate(Gene=gene_name,Sample=SAMPLE) %>%
+    left_join(absolute_cn_long,by=c("Gene","Sample")) %>%
+    left_join(ASE_data,by = c("Sample","Gene")) %>%
+    select(-Sample,-Gene,-Cytoband)
+  IRX4_result <- df
+}
+##ERBB2
+if(1){
+  ERBB2_bed <- ensembl_canonical_transcripts_bed4[ensembl_canonical_transcripts_bed4$gene_name=="ERBB2",]
+  ERBB2_plus_flanking_bed <- ensembl_canonical_transcripts_bed4 %>%
+    filter(gene_name=="ERBB2") %>%
+    mutate(start=start-500000,end=end+500000)
+
+  gr_ERBB2_plus_flanking <- GRanges(seqnames = ERBB2_plus_flanking_bed$chr,
+                                   ranges = IRanges(start = ERBB2_plus_flanking_bed$start+1,
+                                                    end=ERBB2_plus_flanking_bed$end))
+  gr_bedpes <- GRanges(
+    seqnames = new_bedpe_986$CHROM_A,
+    ranges = IRanges(start = new_bedpe_986$START_A+1,end = new_bedpe_986$END_A)
+  )
+  hits_ERBB2plusflanking_bedpes <- findOverlaps(gr_ERBB2_plus_flanking,gr_bedpes)
+  overlap_data <- data.frame(
+    ERBB2_index = queryHits(hits_ERBB2plusflanking_bedpes),
+    bedpe_index = subjectHits(hits_ERBB2plusflanking_bedpes)
+  )
+  result <- cbind(ERBB2_plus_flanking_bed[overlap_data$ERBB2_index, ],new_bedpe_986[overlap_data$bedpe_index, ])
+
+  df <- result %>%
+    select(gene_name,CHROM_A,START_A,END_A,SAMPLE,INFO,ID) %>%
+    mutate(distance_SV2TSS=ERBB2_bed$end-START_A) %>%
+    mutate(relative_location=ifelse(distance_SV2TSS<0,"upstream",
+                                    ifelse(5512>distance_SV2TSS & distance_SV2TSS>0,
+                                           "gene_body","downstream"))) %>%
+    mutate(Sample=SAMPLE,symbol=gene_name) %>%
+    left_join(lc_1019_expr_long,by=c("Sample","symbol")) %>%
+    select(-Sample,-symbol) %>%
+    #每个样本仅保留到TSS距离最小者
+    group_by(SAMPLE) %>%
+    filter(abs(distance_SV2TSS) == min(abs(distance_SV2TSS))) %>%
+    ungroup() %>%
+    mutate(Gene=gene_name,Sample=SAMPLE) %>%
+    left_join(absolute_cn_long,by=c("Gene","Sample")) %>%
+    left_join(ASE_data,by = c("Sample","Gene")) %>%
+    select(-Sample,-Gene,-Cytoband)
+  ERBB2_result <- df
+}
+
+
+
+
+##准备用于绘制WGS vs RNA BAF的图
+#需要的数据是基于单个样本的,对单个样本的某个基因的某个生殖系突变
+#sample gene chr pos ref alt gene DNA_ref_counts  DNA_alt_counts RNA_ref_counts RNA_alt_counts
+
+#一个是需要知道哪些样本的哪个gene的EH的candidates-就是三个基因基因本身以及上下游500kb的sv
+#转录本的坐标文件从ensemble文件找
+#突变对应的RNA-Seq reads从对应样本的ASEReadcounter结果文件里找
+#突变对应的DNA-Seq reads需要从对应样本的germline vcf文件(FreeBayes结果)里面找-这个需要提取子集不然文件太大
+
+#1 得到sample和gene
+sg <- rbind(TERT_result,SLC6A18_result,IRX4_result,ERBB2_result)
+#SLC6A18和TERT挨着的,看下两个的靶样本是不是很多是一样的(这样有一个问题是amp就不能作为SLC6A18是癌基因的证据了)
+tert_samples <- TERT_result$SAMPLE[abs(TERT_result$distance_SV2TSS)<100000]
+slc6a18_samples <- SLC6A18_result$SAMPLE[abs(SLC6A18_result$distance_SV2TSS)<100000 & SLC6A18_result$deseq2_normalized_counts>1]
+intersect(tert_samples,slc6a18_samples)
+#tmd slc6a18一共29个，28个都是和tert重复的-还好发现了这个bug，不然傻乎乎的去验证到时候啥也不是
+
+
+#2 得到坐标区间
+bed <- ensembl_canonical_transcripts_bed4[ensembl_canonical_transcripts_bed4$gene_name
+                                          %in% c("TERT","SLC6A18","IRX4","ERBB2"),]
+
+#3 得到突变对应的RNA-Seq reads
+# 假设 config 是一个字符向量，包含你想要匹配的前缀
+config <- unique(sg$SAMPLE) # 替换为你的实际前缀
+
+# 设置文件夹路径
+folder_path <- "~/1000_noncoding/4.ASE/1.resources/success_files"  # 替换为你的实际文件夹路径
+
+# 获取文件夹中所有以 config 中前缀开头的文件
+all_files <- list.files(folder_path, full.names = TRUE)
+matched_files <- all_files[sapply(config, function(prefix) {
+  grep(paste0("^", prefix), basename(all_files), value = FALSE)
+}) %>% unlist() %>% unique()]
+
+# 读取所有文件并添加 sample 列
+rnaseq_counts_data <- map_dfr(matched_files, function(file) {
+  # 提取文件名（不含路径）
+  file_name <- basename(file)
+
+  # 找到匹配的前缀
+  matched_prefix <- config[sapply(config, function(prefix) {
+    grepl(paste0("^", prefix), file_name)
+  })]
+
+  # 读取文件
+  data <- read.delim(file)  # 读取文件
+  data$contig <- as.character(data$contig)
+  data <- data %>%
+    filter(contig %in% c("5","17"))
+
+  if(nrow(data)>0){
+  # 添加 sample 列
+  data$sample <- matched_prefix
+
+  return(data)
+  }
+})
+rnaseq_counts_data$chr <- paste0("chr",rnaseq_counts_data$contig)
+save(rnaseq_counts_data,file="~/1000_noncoding/3.SV_analysis/2.analysis/RData/6-3_rnaseq_counts_data.RData")
+
+gr_rnaseq <- GRanges(seqnames = rnaseq_counts_data$chr,
+                     ranges = IRanges(start = rnaseq_counts_data$position,end = rnaseq_counts_data$position))
+
+gr_genes <- GRanges(
+  seqnames = bed$chr,
+  ranges = IRanges(start = bed$start+1,end = bed$end)
+)
+hits <- findOverlaps(gr_rnaseq,gr_genes)
+overlap_data <- data.frame(
+  rnaseq_index = queryHits(hits),
+  genes_index = subjectHits(hits)
+)
+result <- cbind(rnaseq_counts_data[overlap_data$rnaseq_index, ],bed[overlap_data$genes_index, ])
+df <- result[,c(15,2,4:8,14,16)]
+
+#4 得到突变对应的DNA-seq reads
+config <- tnmatch$normal_id[tnmatch$tumor_id %in% unique(sg$SAMPLE)] # 替换为你的实际前缀
+#设置文件夹路径
+folder_path <- "~/1000_noncoding/3.SV_analysis/1.resources/target_vcfs/"
+# 获取文件夹中所有以 config 中前缀开头的文件
+all_files <- list.files(folder_path, full.names = TRUE)
+matched_files <- all_files[sapply(config, function(prefix) {
+  grep(paste0("^", prefix), basename(all_files), value = FALSE)
+}) %>% unlist() %>% unique()]
+process_vcf <- function(file) {
+  # 使用 read.vcfR 读取 VCF 文件，得到 S4 对象
+  vcf <- read.vcfR(file)
+  gt <- vcf@gt
+  vcf <- vcf@fix
+  vcf <- as.data.frame(vcf)
+  gt <- as.data.frame(gt)
+  df <- cbind(vcf,gt)
+  df <- df %>%
+    mutate(
+      # 使用列索引提取第二列
+      counts_part = str_extract(.[[10]], "^[^:]+:[^:]+:([^:]+)", group = 1),
+      ref_count = as.numeric(str_split_i(counts_part, ",", 1)),
+      alt_count = as.numeric(str_split_i(counts_part, ",", 2))
+    ) %>%
+    select(-counts_part)
+  df$sample <- gsub("^([^_]+)_.*", "\\1",colnames(df)[10])
+  df <- df[,c(1,2,4,5,11,12,13)]
+  return(df)
+}
+dnaseq_counts_data <- lapply(matched_files, process_vcf) %>%
+  discard( ~ nrow(.x) == 0) %>%
+  bind_rows()
+save(dnaseq_counts_data,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/dnaseq_counts_data.Rdata")
+dnaseq_counts_data$POS <- as.numeric(dnaseq_counts_data$POS)
+
+gr_dnaseq <- GRanges(seqnames = dnaseq_counts_data$CHROM,
+                     ranges = IRanges(start = dnaseq_counts_data$POS,end = dnaseq_counts_data$POS))
+
+gr_genes <- GRanges(
+  seqnames = bed$chr,
+  ranges = IRanges(start = bed$start+1,end = bed$end)
+)
+hits <- findOverlaps(gr_dnaseq,gr_genes)
+overlap_data <- data.frame(
+  dnaseq_index = queryHits(hits),
+  genes_index = subjectHits(hits)
+)
+result <- cbind(dnaseq_counts_data[overlap_data$dnaseq_index, ],bed[overlap_data$genes_index, ])
+colnames(result) <- c("chr","position","refAllele","altAllele",
+                      "DNA_refCount","DNA_altCount",
+                      "normal_id","gene_name","chrom","start","end","strand")
+result <- result[,c(1:8)]
+#把DNA和RNA的整合到一起
+df1 <- df %>%
+  mutate(tumor_id=sample) %>%
+  left_join(tnmatch,by=c("tumor_id")) %>%
+  select(-tumor_id) %>%
+  left_join(result,by=c("chr","position","refAllele",
+                        "altAllele","gene_name","normal_id")) %>%
+  select(sample,normal_id,gene_name,everything())
+colnames(df1)[8:10] <- c("RNA_refCount","RNA_altCount","RNA_totalCount")
+
+#5 把sv的信息整合进来
+df2 <- df1 %>%
+  mutate(SAMPLE=sample) %>%
+  left_join(sg,by=c("gene_name","SAMPLE")) %>%
+  select(-SAMPLE)
+df2 <- df2[,c(1:12,17:19,21)]
+df2 <- na.omit(df2)
+df2 <- df2[df2$RNA_totalCount>=3,]
+counts_data <- df2
+save(counts_data,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/6-3 counts_data.RData")
+
+
+
+
+##绘图
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/6-3 counts_data.RData")
+#以TERT的1632LC为例进行绘图
+gene <- "TERT"
+Sample <- "1632LC"
+ase_plot <- function(Sample,gene){
+df <- counts_data %>%
+  filter(gene_name==gene,sample==Sample)
+#DNA
+# 将数据框转换为长格式，便于 ggplot2 绘制
+df_long <- df %>%
+  pivot_longer(cols = starts_with("DNA"), names_to = "count", values_to = "value")  # 转换为长格式
+
+# 计算每个样本中各 feature 占总和的百分比
+df_long <- df_long %>%
+  group_by(position) %>%
+  mutate(percentage = value / sum(value) * 100)  # 计算百分比
+df_long$position <- as.character(df_long$position)
+
+# 绘制柱状图
+p1 <- ggplot(df_long, aes(x = position, y = percentage, fill = count)) +
+  geom_bar(stat = "identity", position = "stack") +  # 用 'dodge' 实现分组柱状图
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +  # 格式化 y 轴为百分比
+  scale_fill_manual(values=c("DNA_altCount"="#CD3B42","DNA_refCount"="#4D779B"),name = "",  # 图例标题
+                    labels = c("alt allele","ref allele"))+
+  labs(y = "", x = "",title = paste(Sample,gene)) +
+  # 添加参考线
+  geom_hline(yintercept = 50, linetype = "dashed", color = "grey", linewidth = 0.8) +
+  annotate("text", x = Inf, y = 50, label = "vaf=0.5",
+           hjust = 1.1, vjust = -0.5, color = "black") +
+  theme(
+    # 背景设置 - 纯白
+    panel.background = element_rect(fill = "white", colour = NA),  # colour = NA 移除边框
+    plot.background = element_rect(fill = "white", colour = NA),
+
+    # 完全移除所有网格线和边框
+    panel.grid = element_blank(),
+    panel.border = element_blank(),  # 移除面板边框
+
+    # 坐标轴线设置（可选）
+    #axis.line = element_line(colour = "black"),  # 保留坐标轴线
+    # 或者完全移除坐标轴线：
+    axis.line = element_blank(),
+
+    #
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+#RNA
+# 将数据框转换为长格式，便于 ggplot2 绘制
+df_long <- df %>%
+  pivot_longer(cols = c("RNA_refCount","RNA_altCount"), names_to = "count", values_to = "value") %>% # 转换为长格式
+  mutate(
+    `log10(RNA coverage)` = log10(RNA_totalCount + 1))
+# 计算每个样本中各 feature 占总和的百分比
+df_long <- df_long %>%
+  group_by(position) %>%
+  mutate(percentage = value / sum(value) * 100)  # 计算百分比
+df_long$position <- as.character(df_long$position)
+
+# 绘制柱状图
+p2 <- ggplot(df_long, aes(x = position, y = percentage, fill = count)) +
+  geom_bar(stat = "identity", position = "stack") +  # 用 'dodge' 实现分组柱状图
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +  # 格式化 y 轴为百分比
+  scale_fill_manual(values=c("RNA_altCount"="#CD3B42","RNA_refCount"="#4D779B"),guide="none") +
+  geom_point(aes(y = -10, size = `log10(RNA coverage)`),color="#E29135",shape = 16) +
+  labs(y = "", x = "") +
+  theme(
+    # 背景设置 - 纯白
+    panel.background = element_rect(fill = "white", colour = NA),  # colour = NA 移除边框
+    plot.background = element_rect(fill = "white", colour = NA),
+
+    # 完全移除所有网格线和边框
+    panel.grid = element_blank(),
+    panel.border = element_blank(),  # 移除面板边框
+
+    # 坐标轴线设置（可选）
+    #axis.line = element_line(colour = "black"),  # 保留坐标轴线
+    # 或者完全移除坐标轴线：
+    axis.line = element_blank(),
+
+    #
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+
+create_simple_legend <- function() {
+  plot <- ggplot() +
+    theme_void() +
+    # 技术图例
+    annotate("rect", xmin = 0, xmax = 0.1, ymin = 0.8, ymax = 0.85, fill = "#4D779B") +
+    annotate("rect", xmin = 0, xmax = 0.1, ymin = 0.75, ymax = 0.80, fill = "#CD3B42") +
+    annotate("text", x = 0.125, y = 0.825, label = "ref allele", hjust = 0, size = 4) +
+    annotate("text", x = 0.125, y = 0.775, label = "alt allele", hjust = 0, size = 4) +
+
+    # 辅助线图例
+    annotate("segment", x = 0, xend = 0.14, y = 0.6, yend = 0.6,
+             linetype = "dashed", color = "grey", size = 1) +
+    annotate("text", x = 0.15, y = 0.6, label = "vaf = 0.5", hjust = 0, size = 4) +
+
+    ylim(0, 1) + xlim(0, 1)
+
+  return(plot)
+}
+p1/plot_spacer()/p2+plot_layout(guides = "collect",heights = c(4, -1.1 ,4))
+#(p1/p2) | create_simple_legend()+
+#  plot_layout(widths = c(5, 1))
+#(p1 + theme(plot.margin = unit(c(0,0,0,0), "pt"))) /
+#  (p2 + theme(plot.margin = unit(c(0,0,0,0), "pt")))+plot_layout(guides = "collect")
+filename <- paste0("~/1000_noncoding/3.SV_analysis/pictures/Peifer_aseplots/",Sample,gene,".pdf")
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+}
+#看下哪些是外显子，哪些是内含子 
+```
+                                                    (Result)
+The output from FASTQC and multiqc look good!  Proceeding to differential expression analysis of unicorn horn between activated and unactivated samples.
