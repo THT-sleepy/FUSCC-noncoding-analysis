@@ -1,0 +1,686 @@
+##代码如下
+```
+##### Fujimoto-SV对基因表达的影响 #####
+
+##分两步来
+##step1 挑出来>=15(2%) 个样本在上下游500kb/300kb/100kb有断点的gene
+##step2 比较这些gene有突变和没突变表达的差异(fc和p),有突变者和无突变者的CN,矫正CN后的差异;质控(去掉不表达的gene等)
+
+##loading packages
+library(GenomicRanges)
+library(tidyverse)
+library(data.table)
+library(doParallel)
+
+##loading files
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/config_986.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/ensembl_canonical_transcripts_bed4.Rdata")
+gene_intervals <- ensembl_canonical_transcripts_bed4
+#得到癌基因list
+if(1){
+  cancer_gene_737_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/737 cancer genes by pcawg.csv"
+  lung_drivers_df_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/20220203_lung_drivers.csv"
+  cosmic_census_cancer_gene_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/Cancer Gene Census v100.tsv"
+  oncokb_drivergenes_list_filepath <- "/home/data/t190513/1000_noncoding/activedriverwgs/oncokb_cancerGeneList_2024_10_24.tsv"
+  OncoKB_driver <- fread(oncokb_drivergenes_list_filepath)
+  CGC_driver <- fread(cosmic_census_cancer_gene_filepath)
+  PCAWG_driver <- fread(cancer_gene_737_filepath)
+  names(PCAWG_driver) <- "Gene_Symbol"
+  lung_driver <- fread(lung_drivers_df_filepath)
+  all_drivergenes_list <- union(OncoKB_driver$`Hugo Symbol`,CGC_driver$`Gene Symbol`)
+  all_drivergenes_list  <- union(all_drivergenes_list,PCAWG_driver$Gene_Symbol)             
+  all_drivergenes_list <- union(all_drivergenes_list,lung_driver$Gene_Symbol)
+  save(all_drivergenes_list,file="~/1000_noncoding/3.SV_analysis/2.analysis/3-3.all_drivergenes_list.Rdata")
+  all_drivergenes_df <- data.frame(gene=all_drivergenes_list) %>%
+    mutate(`Gene Symbol`=gene,`Hugo Symbol`=gene) %>%
+    left_join(OncoKB_driver,by=c("Hugo Symbol")) %>%
+    left_join(CGC_driver,by=c("Gene Symbol"))
+  
+}
+
+#表达矩阵
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/expr_all.Rdata")
+expr <- expr_allsamples %>%
+  select(config_986)
+
+#拷贝数
+if(1){
+  cnv_filepath <- "/home/data/t190513/1000_noncoding/3.SV_analysis/1.resources/all_data_by_genes.txt"
+  cnv <- fread(cnv_filepath,data.table = F) 
+  cnv_1 <- cnv
+  rownames(cnv_1) <- cnv_1$`Gene Symbol`
+  cnv_1[,1:3] <- NULL
+  #只留下config有的样本Tumor的列
+  pattern <- paste(config_986,collapse = "|")
+  cnv_1 <- cnv_1[,grepl(pattern,colnames(cnv_1))]
+}
+#断点
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_breakpoints_afterQC.Rdata")
+
+#在肿瘤中表达大于50%的基因
+if(1){
+#得到这些基因在表达矩阵中对应的行名
+# 计算每行表达值为0的列的数量(+过1的所以是1)
+zero_count <- apply(expr == 1, 1, sum)
+# 计算总列数
+total_columns <- ncol(expr)
+# 筛选出小于10%列值为0的行的行名
+rownames  <- rownames(expr[zero_count < total_columns * 0.5, ])
+# 使用 strsplit 按照 "|" 分割
+split_vec <- strsplit(rownames, "\\|")
+# 扁平化为一个向量
+flattened_vec <- unlist(split_vec) #一共是48386个基因在>10%的肿瘤中有表达
+genes_expr_over10percentT <- flattened_vec
+save(genes_expr_over10percentT,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/3-3.genes_expr_over50percentT.RData")
+}
+
+
+######################500kb#############################################
+##step1 #将gene的上下游500kb与断点overlap
+if(1){
+  #得到gene_flanking
+  if(1){
+    # 创建一个空的数据框来存储新的区间
+    gene_flanking <- data.frame(chr = character(), start = numeric(), end = numeric(), gene_name = character(), stringsAsFactors = FALSE)
+    # 处理每个基因的上游和下游500kb区间
+    row_index <- 1
+    start <- gene_intervals$start
+    end <- gene_intervals$end
+    chr <- gene_intervals$chr
+    gene_name <- gene_intervals$gene_name
+    upstream_start <- rep(NA,nrow(gene_intervals))
+    upstream_end <- rep(NA,nrow(gene_intervals))
+    downstream_start <- rep(NA,nrow(gene_intervals))
+    downstream_end <- rep(NA,nrow(gene_intervals))
+    
+    for (i in 1:nrow(gene_intervals)) {
+      
+      # 上游500kb
+      upstream_start[i] <- start[i] - 500000
+      upstream_end[i] <- start[i]
+      if (upstream_start[i] < 0) upstream_start[i] <- 0  # 防止负值
+      
+      # 下游500kb
+      downstream_start[i] <- end[i]
+      downstream_end[i] <- end[i] + 500000
+      
+    }
+    gene_flanking_upstream <- data.frame(chr,start=upstream_start,end=upstream_end,gene_name)
+    gene_flanking_downstream <- data.frame(chr,start=downstream_start,end=downstream_end,gene_name)
+    gene_flanking <- rbind(gene_flanking_upstream,gene_flanking_downstream) %>%
+      arrange(chr,start,gene_name)
+  }
+  save(gene_flanking,file = "~/1000_noncoding/3.SV_analysis/2.analysis/3-3.gene_flanking500kb.Rdata")
+  #overlap
+  gr_gene_flankings <- GRanges(
+    seqnames = gene_flanking$chr,
+    ranges = IRanges(start = gene_flanking$start+1, end = gene_flanking$end)
+  )
+  save(gr_gene_flankings,file="~/1000_noncoding/3.SV_analysis/2.analysis/3-3.gr_gene_flankings500kb.Rdata")
+  gr_bnds <- GRanges(
+    seqnames = df_split$CHROM,
+    ranges = IRanges(start = df_split$POS,width = 1)
+  )
+  hits_geneflanking_bnds <- findOverlaps(gr_gene_flankings,gr_bnds)
+  overlap_data <- data.frame(
+    flanking_index = queryHits(hits_geneflanking_bnds),
+    bnd_index = subjectHits(hits_geneflanking_bnds)
+  )
+  
+  # 将突变和区间数据合并
+  result <- cbind(gene_flanking[overlap_data$flanking_index, ],df_split[overlap_data$bnd_index, ]) 
+  result <- result[,c(4,7,8,9)] %>%
+    group_by(gene_name) %>%
+    mutate(n_samples = length(unique(SAMPLE))) %>%
+    ungroup()
+  save(result,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_flanking500kb_bnd_overlap.Rdata")
+}
+
+
+##step2
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_flanking500kb_bnd_overlap.Rdata")
+over15bnds_gene <- result[result$n_samples >= 15,]
+df <- over15bnds_gene
+
+#标记在<50%肿瘤中表达的gene,标记癌基因
+#得到在<50%肿瘤中表达的gene_list
+load("~/1000_noncoding/3.SV_analysis/2.analysis/genes_expr_less50Tumor.Rdata")
+df <- df %>%
+  mutate(expr_over_50=ifelse(gene_name %in% gene_expr_less50,TRUE,FALSE)) %>% #其实gene_expr_less50是over50的基因集，变量名写反了不过不影响
+  mutate(cancer_gene=ifelse(gene_name %in% all_drivergenes_list,TRUE,FALSE))
+
+#计算raw_foldchange,raw_p,cnnormal_foldchange,cnnormal_p
+expr_rownames <- rownames(expr)
+expr_hugosymbol <- sapply(expr_rownames,function(x) strsplit(x,"\\|")[[1]][2])
+#Func1 输入gene和df,返回raw_p和raw_foldchange
+p_expr <- function(gene,df,expr_rownames,expr_hugosymbol){
+  mutated_samples <- df %>% 
+    filter(gene_name==gene) %>%
+    select(SAMPLE)
+  mutated_samples <- unique(mutated_samples$SAMPLE)
+  mutated_indices <- which(names(expr) %in% mutated_samples)
+  d_f <- data.frame()
+  #如果该基因是ENSG开头,与在rownames里即可
+  if(grepl("^ENSG",gene)){
+    d_f <- expr[grepl(gene,expr_rownames),]
+  }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+    d_f <- expr[expr_hugosymbol==gene,]
+  }
+  #如果能匹配上
+  if(nrow(d_f)==1 & sum(mutated_indices) != 0){
+    # 将表达量分组
+    #原本的mutated samples是以，相连接的一些值，弄成一个向量
+    group_mutated <- as.numeric(d_f[1,mutated_indices])
+    group_unmutated <- as.numeric(d_f[1,-mutated_indices])
+    #进行检验
+    wilcox_test_result <- wilcox.test(group_mutated, group_unmutated)
+    p <- wilcox_test_result$p.value
+    #结果写入result
+    log2_fc <- log2(median(as.numeric(group_mutated))/median(as.numeric(group_unmutated)))
+    result <- paste(p,log2_fc,sep = ":")
+    return(result)
+  }else{return(NA)
+  }
+}
+#Func2 输入id，靶基因，和ems数据框，得到突变样本和非突变样本的值和检验p值和log2 FC,和Func1不同的是
+#假设检验仅在cn normal的样本中进行(1-22 cn=2)
+p_expr_cnnormal <- function(target_gene,df,expr_rownames,expr_hugosymbol){
+  mutated_samples <- df %>% 
+    filter(gene_name==target_gene) %>%
+    select(SAMPLE)
+  mutated_samples <- unique(mutated_samples$SAMPLE)
+  cn_samples <- names(cnv_1)[cnv_1[target_gene, ] > log2(1/2) & cnv_1[target_gene, ] < log2(4)]
+  #cn_samples <- names(cnv_1)[cnv_1[target_gene, ] %in% c(-1,0,1)]
+  cn_mutated_samples <- intersect(cn_samples,mutated_samples)
+  cn_unmutated_samples <- setdiff(cn_samples,mutated_samples)
+  mutated_indices <- which(names(expr) %in% cn_mutated_samples)
+  unmutated_indices <- which(names(expr) %in% cn_unmutated_samples)
+  d_f <- data.frame()
+  #如果该基因是ENSG开头,与在rownames里即可
+  if(grepl("^ENSG",target_gene)){
+    d_f <- expr[grepl(target_gene,expr_rownames),]
+  }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+    d_f <- expr[expr_hugosymbol==target_gene,]
+  }
+  #如果能匹配上且samples不为0
+  if(nrow(d_f)==1 & sum(mutated_indices) != 0){
+    # 将表达量分组
+    #原本的mutated samples是以，相连接的一些值，弄成一个向量
+    group_mutated <- as.numeric(d_f[1,mutated_indices])
+    group_unmutated <- as.numeric(d_f[1,unmutated_indices])
+    #进行检验
+    wilcox_test_result <- wilcox.test(group_mutated, group_unmutated)
+    p <- wilcox_test_result$p.value
+    #结果写入result
+    log2_fc <- log2(median(as.numeric(group_mutated))/median(as.numeric(group_unmutated)))
+    result <- paste(p,log2_fc,sep = ":")
+    return(result)
+  }else{return(NA)
+  }
+}
+
+df1 <- unique(df[,c("gene_name","expr_over_50","cancer_gene","n_samples")])
+#计算raw_p和raw_fc
+if(1){
+  results <- rep(NA,nrow(df1))
+  cl <- makeCluster(48)
+  # 注册并行后端
+  registerDoParallel(cl)
+  # 并行执行 for 循环
+  results <- foreach(i = 1:nrow(df1), .combine = c) %dopar% {
+    library(dplyr)
+    p_expr(df1$gene_name[i], df, expr_rownames, expr_hugosymbol)
+  }
+  # 停止并行计算
+  stopCluster(cl)
+  df1$p_expr <- results
+  df1 <- df1 %>%
+    separate(p_expr,into=c("raw_expr_p","raw_expr_log2FC"),sep = ":")
+}
+#计算cnnormal_p和cnnormal_fc
+if(1){
+  results <- rep(NA,nrow(df1))
+  cl <- makeCluster(48)
+  # 注册并行后端
+  registerDoParallel(cl)
+  # 并行执行 for 循环
+  results <- foreach(i = 1:nrow(df1), .combine = c) %dopar% {
+    library(dplyr)
+    p_expr_cnnormal(df1$gene_name[i], df, expr_rownames, expr_hugosymbol)
+  }
+  # 停止并行计算
+  stopCluster(cl)
+  df1$p_expr_cnnormal <- results
+  df1 <- df1 %>%
+    separate(p_expr_cnnormal,into=c("cnnormal_expr_p","cnnormal_expr_log2FC"),sep = ":")
+}
+save(df1,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_500kbdf_expr.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_500kbdf_expr.Rdata")
+
+#raw_expr_p为NA的直接去掉，这是因为我用的基因注释版本比转录组counts的版本新一点，
+#有些是原版本没有的基因，就会返回NA
+df1 <- df1[!is.na(df1$raw_expr_p),]
+
+#把expr < 50%的gene的p都设为1
+df1$raw_expr_p <- ifelse(df1$expr_over_50==T,df1$raw_expr_p,1)
+df1$cnnormal_expr_p <- ifelse(df1$expr_over_50==T,df1$cnnormal_expr_p,1)
+
+#算Q值
+df1$raw_expr_q <- p.adjust(df1$raw_expr_p ,method = "BH")
+df1$cnnormal_expr_q <- p.adjust(df1$cnnormal_expr_p ,method = "BH")
+df1$raw_expr_q_cancergene[df1$cancer_gene==T] <- p.adjust(df1$raw_expr_p[df1$cancer_gene==T] ,method = "BH")
+df1$cnnormal_expr_q_cancergene[df1$cancer_gene==T] <- p.adjust(df1$cnnormal_expr_p[df1$cancer_gene==T] ,method = "BH")
+
+fujimoto_flanking500kb_geneexpr <- df1
+
+oncokb <- OncoKB_driver
+cgc <- CGC_driver
+
+save(fujimoto_flanking500kb_geneexpr,file="~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_flanking500kb_geneexpr.Rdata")
+
+######################300kb#############################################
+##step1 #将gene的上下游300kb与断点overlap
+if(1){
+  #得到gene_flanking
+  if(1){
+    # 创建一个空的数据框来存储新的区间
+    gene_flanking <- data.frame(chr = character(), start = numeric(), end = numeric(), gene_name = character(), stringsAsFactors = FALSE)
+    # 处理每个基因的上游和下游300kb区间
+    row_index <- 1
+    start <- gene_intervals$start
+    end <- gene_intervals$end
+    chr <- gene_intervals$chr
+    gene_name <- gene_intervals$gene_name
+    upstream_start <- rep(NA,nrow(gene_intervals))
+    upstream_end <- rep(NA,nrow(gene_intervals))
+    downstream_start <- rep(NA,nrow(gene_intervals))
+    downstream_end <- rep(NA,nrow(gene_intervals))
+    
+    for (i in 1:nrow(gene_intervals)) {
+      
+      # 上游300kb
+      upstream_start[i] <- start[i] - 300000
+      upstream_end[i] <- start[i]
+      if (upstream_start[i] < 0) upstream_start[i] <- 0  # 防止负值
+      
+      # 下游300kb
+      downstream_start[i] <- end[i]
+      downstream_end[i] <- end[i] + 300000
+      
+    }
+    gene_flanking_upstream <- data.frame(chr,start=upstream_start,end=upstream_end,gene_name)
+    gene_flanking_downstream <- data.frame(chr,start=downstream_start,end=downstream_end,gene_name)
+    gene_flanking <- rbind(gene_flanking_upstream,gene_flanking_downstream) %>%
+      arrange(chr,start,gene_name)
+  }
+  save(gene_flanking,file = "~/1000_noncoding/3.SV_analysis/2.analysis/3-3.gene_flanking300kb.Rdata")
+  #overlap
+  gr_gene_flankings <- GRanges(
+    seqnames = gene_flanking$chr,
+    ranges = IRanges(start = gene_flanking$start+1, end = gene_flanking$end)
+  )
+  save(gr_gene_flankings,file="~/1000_noncoding/3.SV_analysis/2.analysis/3-3.gr_gene_flankings300kb.Rdata")
+  gr_bnds <- GRanges(
+    seqnames = df_split$CHROM,
+    ranges = IRanges(start = df_split$POS,width = 1)
+  )
+  hits_geneflanking_bnds <- findOverlaps(gr_gene_flankings,gr_bnds)
+  overlap_data <- data.frame(
+    flanking_index = queryHits(hits_geneflanking_bnds),
+    bnd_index = subjectHits(hits_geneflanking_bnds)
+  )
+  
+  # 将突变和区间数据合并
+  result <- cbind(gene_flanking[overlap_data$flanking_index, ],df_split[overlap_data$bnd_index, ]) 
+  result <- result[,c(4,7,8,9)] %>%
+    group_by(gene_name) %>%
+    mutate(n_samples = length(unique(SAMPLE))) %>%
+    ungroup()
+  save(result,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_flanking300kb_bnd_overlap.Rdata")
+}
+
+
+##step2
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_flanking300kb_bnd_overlap.Rdata")
+over15bnds_gene <- result[result$n_samples >= 15,]
+df <- over15bnds_gene
+
+#标记在<50%肿瘤中表达的gene,标记癌基因
+#得到在<50%肿瘤中表达的gene_list
+load("~/1000_noncoding/3.SV_analysis/2.analysis/genes_expr_less50Tumor.Rdata")
+df <- df %>%
+  mutate(expr_over_50=ifelse(gene_name %in% gene_expr_less50,TRUE,FALSE)) %>% #其实gene_expr_less50是over50的基因集，变量名写反了不过不影响
+  mutate(cancer_gene=ifelse(gene_name %in% all_drivergenes_list,TRUE,FALSE))
+
+#计算raw_foldchange,raw_p,cnnormal_foldchange,cnnormal_p
+expr_rownames <- rownames(expr)
+expr_hugosymbol <- sapply(expr_rownames,function(x) strsplit(x,"\\|")[[1]][2])
+#Func1 输入gene和df,返回raw_p和raw_foldchange
+p_expr <- function(gene,df,expr_rownames,expr_hugosymbol){
+  mutated_samples <- df %>% 
+    filter(gene_name==gene) %>%
+    select(SAMPLE)
+  mutated_samples <- unique(mutated_samples$SAMPLE)
+  mutated_indices <- which(names(expr) %in% mutated_samples)
+  d_f <- data.frame()
+  #如果该基因是ENSG开头,与在rownames里即可
+  if(grepl("^ENSG",gene)){
+    d_f <- expr[grepl(gene,expr_rownames),]
+  }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+    d_f <- expr[expr_hugosymbol==gene,]
+  }
+  #如果能匹配上
+  if(nrow(d_f)==1 & sum(mutated_indices) != 0){
+    # 将表达量分组
+    #原本的mutated samples是以，相连接的一些值，弄成一个向量
+    group_mutated <- as.numeric(d_f[1,mutated_indices])
+    group_unmutated <- as.numeric(d_f[1,-mutated_indices])
+    #进行检验
+    wilcox_test_result <- wilcox.test(group_mutated, group_unmutated)
+    p <- wilcox_test_result$p.value
+    #结果写入result
+    log2_fc <- log2(median(as.numeric(group_mutated))/median(as.numeric(group_unmutated)))
+    result <- paste(p,log2_fc,sep = ":")
+    return(result)
+  }else{return(NA)
+  }
+}
+#Func2 输入id，靶基因，和ems数据框，得到突变样本和非突变样本的值和检验p值和log2 FC,和Func1不同的是
+#假设检验仅在cn normal的样本中进行(1-22 cn=2)
+p_expr_cnnormal <- function(target_gene,df,expr_rownames,expr_hugosymbol){
+  mutated_samples <- df %>% 
+    filter(gene_name==target_gene) %>%
+    select(SAMPLE)
+  mutated_samples <- unique(mutated_samples$SAMPLE)
+  cn_samples <- names(cnv_1)[cnv_1[target_gene, ] > log2(1/2) & cnv_1[target_gene, ] < log2(4)]
+  #cn_samples <- names(cnv_1)[cnv_1[target_gene, ] %in% c(-1,0,1)]
+  cn_mutated_samples <- intersect(cn_samples,mutated_samples)
+  cn_unmutated_samples <- setdiff(cn_samples,mutated_samples)
+  mutated_indices <- which(names(expr) %in% cn_mutated_samples)
+  unmutated_indices <- which(names(expr) %in% cn_unmutated_samples)
+  d_f <- data.frame()
+  #如果该基因是ENSG开头,与在rownames里即可
+  if(grepl("^ENSG",target_gene)){
+    d_f <- expr[grepl(target_gene,expr_rownames),]
+  }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+    d_f <- expr[expr_hugosymbol==target_gene,]
+  }
+  #如果能匹配上且samples不为0
+  if(nrow(d_f)==1 & sum(mutated_indices) != 0){
+    # 将表达量分组
+    #原本的mutated samples是以，相连接的一些值，弄成一个向量
+    group_mutated <- as.numeric(d_f[1,mutated_indices])
+    group_unmutated <- as.numeric(d_f[1,unmutated_indices])
+    #进行检验
+    wilcox_test_result <- wilcox.test(group_mutated, group_unmutated)
+    p <- wilcox_test_result$p.value
+    #结果写入result
+    log2_fc <- log2(median(as.numeric(group_mutated))/median(as.numeric(group_unmutated)))
+    result <- paste(p,log2_fc,sep = ":")
+    return(result)
+  }else{return(NA)
+  }
+}
+
+df1 <- unique(df[,c("gene_name","expr_over_50","cancer_gene","n_samples")])
+#计算raw_p和raw_fc
+if(1){
+  results <- rep(NA,nrow(df1))
+  cl <- makeCluster(48)
+  # 注册并行后端
+  registerDoParallel(cl)
+  # 并行执行 for 循环
+  results <- foreach(i = 1:nrow(df1), .combine = c) %dopar% {
+    library(dplyr)
+    p_expr(df1$gene_name[i], df, expr_rownames, expr_hugosymbol)
+  }
+  # 停止并行计算
+  stopCluster(cl)
+  df1$p_expr <- results
+  df1 <- df1 %>%
+    separate(p_expr,into=c("raw_expr_p","raw_expr_log2FC"),sep = ":")
+}
+#计算cnnormal_p和cnnormal_fc
+if(1){
+  results <- rep(NA,nrow(df1))
+  cl <- makeCluster(48)
+  # 注册并行后端
+  registerDoParallel(cl)
+  # 并行执行 for 循环
+  results <- foreach(i = 1:nrow(df1), .combine = c) %dopar% {
+    library(dplyr)
+    p_expr_cnnormal(df1$gene_name[i], df, expr_rownames, expr_hugosymbol)
+  }
+  # 停止并行计算
+  stopCluster(cl)
+  df1$p_expr_cnnormal <- results
+  df1 <- df1 %>%
+    separate(p_expr_cnnormal,into=c("cnnormal_expr_p","cnnormal_expr_log2FC"),sep = ":")
+}
+save(df1,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_df_expr300kb.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_df_expr300kb.Rdata")
+
+#raw_expr_p为NA的直接去掉，这是因为我用的基因注释版本比转录组counts的版本新一点，
+#有些是原版本没有的基因，就会返回NA
+df1 <- df1[!is.na(df1$raw_expr_p),]
+
+#把expr < 50%的gene的p都设为1
+df1$raw_expr_p <- ifelse(df1$expr_over_50==T,df1$raw_expr_p,1)
+df1$cnnormal_expr_p <- ifelse(df1$expr_over_50==T,df1$cnnormal_expr_p,1)
+
+#算Q值
+df1$raw_expr_q <- p.adjust(df1$raw_expr_p ,method = "BH")
+df1$cnnormal_expr_q <- p.adjust(df1$cnnormal_expr_p ,method = "BH")
+df1$raw_expr_q_cancergene[df1$cancer_gene==T] <- p.adjust(df1$raw_expr_p[df1$cancer_gene==T] ,method = "BH")
+df1$cnnormal_expr_q_cancergene[df1$cancer_gene==T] <- p.adjust(df1$cnnormal_expr_p[df1$cancer_gene==T] ,method = "BH")
+
+fujimoto_flanking300kb_geneexpr <- df1
+
+oncokb <- OncoKB_driver
+cgc <- CGC_driver
+
+save(fujimoto_flanking300kb_geneexpr,file="~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_flanking300kb_geneexpr.Rdata")
+
+######################100kb#############################################
+##step1 #将gene的上下游100kb与断点overlap
+if(1){
+  #得到gene_flanking
+  if(1){
+    # 创建一个空的数据框来存储新的区间
+    gene_flanking <- data.frame(chr = character(), start = numeric(), end = numeric(), gene_name = character(), stringsAsFactors = FALSE)
+    # 处理每个基因的上游和下游100kb区间
+    row_index <- 1
+    start <- gene_intervals$start
+    end <- gene_intervals$end
+    chr <- gene_intervals$chr
+    gene_name <- gene_intervals$gene_name
+    upstream_start <- rep(NA,nrow(gene_intervals))
+    upstream_end <- rep(NA,nrow(gene_intervals))
+    downstream_start <- rep(NA,nrow(gene_intervals))
+    downstream_end <- rep(NA,nrow(gene_intervals))
+    
+    for (i in 1:nrow(gene_intervals)) {
+      
+      # 上游100kb
+      upstream_start[i] <- start[i] - 100000
+      upstream_end[i] <- start[i]
+      if (upstream_start[i] < 0) upstream_start[i] <- 0  # 防止负值
+      
+      # 下游100kb
+      downstream_start[i] <- end[i]
+      downstream_end[i] <- end[i] + 100000
+      
+    }
+    gene_flanking_upstream <- data.frame(chr,start=upstream_start,end=upstream_end,gene_name)
+    gene_flanking_downstream <- data.frame(chr,start=downstream_start,end=downstream_end,gene_name)
+    gene_flanking <- rbind(gene_flanking_upstream,gene_flanking_downstream) %>%
+      arrange(chr,start,gene_name)
+  }
+  save(gene_flanking,file = "~/1000_noncoding/3.SV_analysis/2.analysis/3-3.gene_flanking100kb.Rdata")
+  #overlap
+  gr_gene_flankings <- GRanges(
+    seqnames = gene_flanking$chr,
+    ranges = IRanges(start = gene_flanking$start+1, end = gene_flanking$end)
+  )
+  save(gr_gene_flankings,file="~/1000_noncoding/3.SV_analysis/2.analysis/3-3.gr_gene_flankings100kb.Rdata")
+  gr_bnds <- GRanges(
+    seqnames = df_split$CHROM,
+    ranges = IRanges(start = df_split$POS,width = 1)
+  )
+  hits_geneflanking_bnds <- findOverlaps(gr_gene_flankings,gr_bnds)
+  overlap_data <- data.frame(
+    flanking_index = queryHits(hits_geneflanking_bnds),
+    bnd_index = subjectHits(hits_geneflanking_bnds)
+  )
+  
+  # 将突变和区间数据合并
+  result <- cbind(gene_flanking[overlap_data$flanking_index, ],df_split[overlap_data$bnd_index, ]) 
+  result <- result[,c(4,7,8,9)] %>%
+    group_by(gene_name) %>%
+    mutate(n_samples = length(unique(SAMPLE))) %>%
+    ungroup()
+  save(result,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_flanking100kb_bnd_overlap.Rdata")
+}
+
+
+##step2
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_flanking100kb_bnd_overlap.Rdata")
+over15bnds_gene <- result[result$n_samples >= 15,]
+df <- over15bnds_gene
+
+#标记在<50%肿瘤中表达的gene,标记癌基因
+#得到在<50%肿瘤中表达的gene_list
+load("~/1000_noncoding/3.SV_analysis/2.analysis/genes_expr_less50Tumor.Rdata")
+df <- df %>%
+  mutate(expr_over_50=ifelse(gene_name %in% gene_expr_less50,TRUE,FALSE)) %>% #其实gene_expr_less50是over50的基因集，变量名写反了不过不影响
+  mutate(cancer_gene=ifelse(gene_name %in% all_drivergenes_list,TRUE,FALSE))
+
+#计算raw_foldchange,raw_p,cnnormal_foldchange,cnnormal_p
+expr_rownames <- rownames(expr)
+expr_hugosymbol <- sapply(expr_rownames,function(x) strsplit(x,"\\|")[[1]][2])
+#Func1 输入gene和df,返回raw_p和raw_foldchange
+p_expr <- function(gene,df,expr_rownames,expr_hugosymbol){
+  mutated_samples <- df %>% 
+    filter(gene_name==gene) %>%
+    select(SAMPLE)
+  mutated_samples <- unique(mutated_samples$SAMPLE)
+  mutated_indices <- which(names(expr) %in% mutated_samples)
+  d_f <- data.frame()
+  #如果该基因是ENSG开头,与在rownames里即可
+  if(grepl("^ENSG",gene)){
+    d_f <- expr[grepl(gene,expr_rownames),]
+  }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+    d_f <- expr[expr_hugosymbol==gene,]
+  }
+  #如果能匹配上
+  if(nrow(d_f)==1 & sum(mutated_indices) != 0){
+    # 将表达量分组
+    #原本的mutated samples是以，相连接的一些值，弄成一个向量
+    group_mutated <- as.numeric(d_f[1,mutated_indices])
+    group_unmutated <- as.numeric(d_f[1,-mutated_indices])
+    #进行检验
+    wilcox_test_result <- wilcox.test(group_mutated, group_unmutated)
+    p <- wilcox_test_result$p.value
+    #结果写入result
+    log2_fc <- log2(median(as.numeric(group_mutated))/median(as.numeric(group_unmutated)))
+    result <- paste(p,log2_fc,sep = ":")
+    return(result)
+  }else{return(NA)
+  }
+}
+#Func2 输入id，靶基因，和ems数据框，得到突变样本和非突变样本的值和检验p值和log2 FC,和Func1不同的是
+#假设检验仅在cn normal的样本中进行(1-22 cn=2)
+p_expr_cnnormal <- function(target_gene,df,expr_rownames,expr_hugosymbol){
+  mutated_samples <- df %>% 
+    filter(gene_name==target_gene) %>%
+    select(SAMPLE)
+  mutated_samples <- unique(mutated_samples$SAMPLE)
+  cn_samples <- names(cnv_1)[cnv_1[target_gene, ] > log2(1/2) & cnv_1[target_gene, ] < log2(4)]
+  #cn_samples <- names(cnv_1)[cnv_1[target_gene, ] %in% c(-1,0,1)]
+  cn_mutated_samples <- intersect(cn_samples,mutated_samples)
+  cn_unmutated_samples <- setdiff(cn_samples,mutated_samples)
+  mutated_indices <- which(names(expr) %in% cn_mutated_samples)
+  unmutated_indices <- which(names(expr) %in% cn_unmutated_samples)
+  d_f <- data.frame()
+  #如果该基因是ENSG开头,与在rownames里即可
+  if(grepl("^ENSG",target_gene)){
+    d_f <- expr[grepl(target_gene,expr_rownames),]
+  }else{ #如果是Hugo_Symbol与Hugo_Symbol比对，需完全匹配
+    d_f <- expr[expr_hugosymbol==target_gene,]
+  }
+  #如果能匹配上且samples不为0
+  if(nrow(d_f)==1 & sum(mutated_indices) != 0){
+    # 将表达量分组
+    #原本的mutated samples是以，相连接的一些值，弄成一个向量
+    group_mutated <- as.numeric(d_f[1,mutated_indices])
+    group_unmutated <- as.numeric(d_f[1,unmutated_indices])
+    #进行检验
+    wilcox_test_result <- wilcox.test(group_mutated, group_unmutated)
+    p <- wilcox_test_result$p.value
+    #结果写入result
+    log2_fc <- log2(median(as.numeric(group_mutated))/median(as.numeric(group_unmutated)))
+    result <- paste(p,log2_fc,sep = ":")
+    return(result)
+  }else{return(NA)
+  }
+}
+
+df1 <- unique(df[,c("gene_name","expr_over_50","cancer_gene","n_samples")])
+#计算raw_p和raw_fc
+if(1){
+  results <- rep(NA,nrow(df1))
+  cl <- makeCluster(48)
+  # 注册并行后端
+  registerDoParallel(cl)
+  # 并行执行 for 循环
+  results <- foreach(i = 1:nrow(df1), .combine = c) %dopar% {
+    library(dplyr)
+    p_expr(df1$gene_name[i], df, expr_rownames, expr_hugosymbol)
+  }
+  # 停止并行计算
+  stopCluster(cl)
+  df1$p_expr <- results
+  df1 <- df1 %>%
+    separate(p_expr,into=c("raw_expr_p","raw_expr_log2FC"),sep = ":")
+}
+#计算cnnormal_p和cnnormal_fc
+if(1){
+  results <- rep(NA,nrow(df1))
+  cl <- makeCluster(48)
+  # 注册并行后端
+  registerDoParallel(cl)
+  # 并行执行 for 循环
+  results <- foreach(i = 1:nrow(df1), .combine = c) %dopar% {
+    library(dplyr)
+    p_expr_cnnormal(df1$gene_name[i], df, expr_rownames, expr_hugosymbol)
+  }
+  # 停止并行计算
+  stopCluster(cl)
+  df1$p_expr_cnnormal <- results
+  df1 <- df1 %>%
+    separate(p_expr_cnnormal,into=c("cnnormal_expr_p","cnnormal_expr_log2FC"),sep = ":")
+}
+save(df1,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_df_expr100kb.Rdata")
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_df_expr100kb.Rdata")
+
+#raw_expr_p为NA的直接去掉，这是因为我用的基因注释版本比转录组counts的版本新一点，
+#有些是原版本没有的基因，就会返回NA
+df1 <- df1[!is.na(df1$raw_expr_p),]
+
+#把expr < 50%的gene的p都设为1
+df1$raw_expr_p <- ifelse(df1$expr_over_50==T,df1$raw_expr_p,1)
+df1$cnnormal_expr_p <- ifelse(df1$expr_over_50==T,df1$cnnormal_expr_p,1)
+
+#算Q值
+df1$raw_expr_q <- p.adjust(df1$raw_expr_p ,method = "BH")
+df1$cnnormal_expr_q <- p.adjust(df1$cnnormal_expr_p ,method = "BH")
+df1$raw_expr_q_cancergene[df1$cancer_gene==T] <- p.adjust(df1$raw_expr_p[df1$cancer_gene==T] ,method = "BH")
+df1$cnnormal_expr_q_cancergene[df1$cancer_gene==T] <- p.adjust(df1$cnnormal_expr_p[df1$cancer_gene==T] ,method = "BH")
+
+fujimoto_flanking100kb_geneexpr <- df1
+
+oncokb <- OncoKB_driver
+cgc <- CGC_driver
+
+save(fujimoto_flanking100kb_geneexpr,file="~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_flanking100kb_geneexpr.Rdata")
+```
