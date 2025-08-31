@@ -1,7 +1,8 @@
 # 此脚本把SV按每150kb进行统计，得到的表格用于绘制曼哈顿图   (What)
 * Aug 21, 2025                                  (When)
 * biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis (Where)
-* 就是参照Fujimoto的文章想统计下每150kb bin的断点数目，从而找出高频SV的区域.                                               (Why)
+* 就是参照Fujimoto的文章想统计下每150kb bin的断点数目，从而找出高频SV的区域.每个样本在
+每个区域的sv最多只被计算为1次                                               (Why)
 
 
 
