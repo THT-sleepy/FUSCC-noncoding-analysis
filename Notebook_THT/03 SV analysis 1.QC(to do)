@@ -1,28 +1,29 @@
 # Quality check on FUSCC SV data             (What)
 
-* Aug 23, 2025                                    (When)
+* Aug 23, 2025                                 (When)
 * biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
-* 对1000对的SV输出做一个质控,主要是PR和SR                (Why)
+* 对1000对的SV输出做一个质控(PR>=3,SR>=1),然后绘制一些概要图          (Why)
 
 
 ## 代码                                          (How)
 
+### loading packages
 ```
-##Quality control of SV variants of 1000 cohort##
-
-##loading packages
 library(vcfR)
 library(tidyverse)
 library(ggplot2)
 library(patchwork)
 library(purrr)
+```
 
-##set variables
+### set variables
+```
 folder_path <- "~/1000_noncoding/3.SV_analysis/1.resources/manta_results/somaticSV_converInved/"
 file_list <- list.files(path = folder_path, pattern = "\\.gz$", full.names = TRUE)
 purity_path <- "~/1000_noncoding/信息源文件/tumor_purity_20230405.csv"
-
-##1 get merged vcf
+```
+### get merged vcf
+```
 #定义操作每个vcf文件的函数
 process_vcf <- function(file) {
   # 使用 read.vcfR 读取 VCF 文件，得到 S4 对象
@@ -67,13 +68,15 @@ vcf <- vcf[,-c(9,10,11,12)]
 }
 
 #使用 lapply 读取所有文件并合并成一个数据框
-load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_vcf_afterQC.Rdata")
-if(0){
 all_vcf_data <- lapply(file_list, process_vcf) %>%
   discard( ~ nrow(.x) == 0) %>%
   bind_rows()
-}
-##2 画一个排序柱状图
+save(all_vcf_data,file="~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_vcf_afterQC.Rdata")
+```
+
+### 画一个排序柱状图
+```
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_vcf_afterQC.Rdata")
 df <- all_vcf_data[,c("SAMPLE","SV_TYPE")]
 df$SV_TYPE <- factor(df$SV_TYPE, levels = c("TRA","INS","INV","DUP","DEL"))
 p1_1 <- ggplot(df, aes(x= reorder(SAMPLE, SAMPLE, function(x) -length(x)),fill = SV_TYPE)) +
@@ -92,8 +95,13 @@ p1_1 <- ggplot(df, aes(x= reorder(SAMPLE, SAMPLE, function(x) -length(x)),fill =
         axis.title.x = element_text(size = 16, face = "bold"), # 横坐标标题字体加大加粗
         axis.title.y = element_text(size = 16, face = "bold"), # 纵坐标标题字体加大加粗
         legend.position = c(0.8, 0.6))
+```
 
-##3 查看各个样本的count,画一个各类型的柱状图
+<img src="./figures/03SV_QC_1000sv排序柱状图.png">
+
+### 查看各个样本的count,画一个各类型的柱状图
+```
+load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_vcf_afterQC.Rdata")
 df <- all_vcf_data %>%
   group_by(SAMPLE) %>%
   count() %>%
@@ -129,9 +137,11 @@ p1_2 <- ggplot(df, aes(x = SV_TYPE,fill = SV_TYPE)) +
     axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
     legend.position = "none"
   )
+```
+<img src=".\figures\03SV_QC_1000sv分类柱状图.png">
 
-
-##4 查看purity和count的关系-相关性曲线
+### 查看purity和sv count的关系-相关性曲线
+```
 purity <- read.csv(purity_path)
 df <- all_vcf_data %>%
   group_by(SAMPLE) %>%
@@ -163,69 +173,12 @@ p1_3 <- ggplot(df1, aes(x = purity, y = n)) +
     axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
     axis.text.y = element_text(size = 12, face = "bold")  # 纵坐标字体加大加粗
   )
-
-
-##5 去掉hypermutated以及肿瘤纯度过低的样本并保存对象
-#先看一下突变数量的分布情况
-purity <- read.csv(purity_path)
-df <- all_vcf_data %>%
-  group_by(SAMPLE) %>%
-  count() %>%
-  arrange(desc(n)) %>%
-  mutate(sample_id=SAMPLE) %>%
-  left_join(purity,by=c("sample_id"))
-
-p1_4 <- ggplot(df, aes(x = n)) +
-  geom_histogram(binwidth = 30,  # 控制区间宽度
-                 fill = "darkred" # 填充颜色
-                 ) +
-  labs(title = "",      # 标题
-       x = "SomaticSVs",                 # x 轴标签
-       y = "Count",
-       tag = "D")+
-  theme_minimal()+
-  theme(
-    plot.tag = element_text(size = 16, face = "bold"),
-    plot.title = element_text(size = 16, face = "bold"),  # 标题加粗并增大字体
-    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
-    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
-    axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
-    axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
-  )
-# 计算四分位数和 IQR
-Q1 <- quantile(df$n, 0.25)  # 下四分位数
-Q3 <- quantile(df$n, 0.75)  # 上四分位数
-IQR <- Q3 - Q1  # 四分位距
-
-# 计算上下限
-lower_limit <- Q1 - 1.5 * IQR
-upper_limit <- Q3 + 1.5 * IQR
-
-df1 <- na.omit(df)
-df1 <- df1[df1$n < upper_limit,]
-p1_5 <- ggplot(df1, aes(x = n)) +
-  geom_histogram(binwidth = 5,  # 控制区间宽度
-                 fill = "darkred" # 填充颜色
-  ) +
-  labs(title = "",      # 标题
-       x = "SomaticSVs",                 # x 轴标签
-       y = "Count",
-       tag = "E")+
-  theme_minimal()+
-  theme(
-    plot.tag = element_text(size = 16, face = "bold"),
-    plot.title = element_text(size = 16, face = "bold"),  # 标题加粗并增大字体
-    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
-    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
-    axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
-    axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
-  )
-all_vcf_data_filtered <- all_vcf_data[all_vcf_data$SAMPLE %in% df1$SAMPLE,]
-save(all_vcf_data,file = "~/1000_noncoding/3.SV_analysis/2.analysis/lc986_vcf_afterQC.Rdata")
-save(all_vcf_data_filtered,file = "~/1000_noncoding/3.SV_analysis/2.analysis/all_vcf_afterQC.Rdata")
-
-##6 简简单单用patchwork拼个图，复杂一定的成品图还是拼接还得是ai
-p1_1 / (p1_2 | p1_3) / (p1_4 | p1_5)
-
 ```
-                                                    (Result)
+<img src=".\figures\03SV_QC_1000sv纯度和sv数量的关系.png">
+
+### 其它文章LUAD sv每个样本看了下大概100出头这样子，我们的PR,SR标准严格一点均值是76（Result）
+
+# to do list
+## 1 比较一下不同分期总sv数量的差别以及各类型sv的差别
+## 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)
+## 3 sv类型和复制时间早晚的关系
