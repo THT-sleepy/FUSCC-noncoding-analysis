@@ -10,7 +10,7 @@
 ########Fujimoto-曼哈顿图###########
 #纵轴是number of samples with STVs,横轴是chr坐标
 
-load("~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_table3.Rdata")
+load(~/1000_noncoding/3.SV_analysis/2.analysis/RData/3-1_df_bin_brks.Rdata" ")
 library(qqman)
 library(ggplot2)
 library(tidyverse)
@@ -34,8 +34,62 @@ if(1){
   all_drivergenes_list <- union(all_drivergenes_list,lung_driver$Gene_Symbol)
 }
 
+#法一 qqman
+df <- fujimoto_table1[,c(1,2,4,6)]
+df <- df %>%
+  mutate(
+    CHROM = recode(CHROM,
+                   "chr1" = 1, "chr2" = 2, "chr3" = 3, "chr4" = 4, "chr5" = 5,
+                   "chr6" = 6, "chr7" = 7, "chr8" = 8, "chr9" = 9, "chr10" = 10,
+                   "chr11" = 11, "chr12" = 12, "chr13" = 13, "chr14" = 14, "chr15" = 15,
+                   "chr16" = 16, "chr17" = 17, "chr18" = 18, "chr19" = 19, "chr20" = 20,
+                   "chr21" = 21, "chr22" = 22, "chrX" = 23, "chrY" = 24)
+  ) %>%
+  mutate(id = paste0("r", row_number())) %>%
+  filter(CHROM != 24)
+# 创建新的cancer_gene列
+df$cancer_gene <- sapply(df$gene_name, function(gene_list) {
+  genes <- unlist(strsplit(gene_list, ";"))  # 将gene_name中的基因分开
+  cancer_genes <- genes[genes %in% all_drivergenes_list]  # 筛选在all_list中的基因
+  paste(cancer_genes, collapse = ";")  # 使用；连接满足条件的基因
+})
+head(df)
+par(cex = 1.5)
+df$cancer_gene <- ifelse(df$unique_samples >=15 ,df$cancer_gene,"")
+df_empty <- df %>% filter(cancer_gene == "")
+
+# 其余部分进行去重，保留每个重复值的第一行
+df_non_empty <- df %>%
+  filter(cancer_gene != "") %>%
+  group_by(cancer_gene) %>%
+  slice(1) %>%
+  ungroup()
+
+# 合并空字符串行和去重后的数据
+df <- bind_rows(df_empty, df_non_empty)
+sv_of_interest <- df$cancer_gene[df$unique_samples >=15 & df$cancer_gene !=""]
+if(1){
+  manhattan(df,
+            chr="CHROM",
+            bp="start_pos",
+            snp = "cancer_gene",
+            p="unique_samples",
+            logp = F,
+            annotatePval = 15,
+            annotateTop = F,
+            chrlabs = c(1:22, "X"),
+            ylab="Number of samples with SVs",
+            ylim=c(0,105),
+            cex =0.7,
+            suggestiveline = F,
+            genomewideline = F,
+            highlight = sv_of_interest
+  )
+}
+par(cex = 1,col="black") 
+
 #法二 ggplot2
-df <- fujimoto_table3[,c(1,2,4,6)]
+df <- df_bin_brks[,c(1,2,4,6)]
 df <- df %>%
   mutate(
     CHROM = recode(CHROM,
