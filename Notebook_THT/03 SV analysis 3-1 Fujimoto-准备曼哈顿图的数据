@@ -1,17 +1,19 @@
-#此脚本把SV按每150kb进行统计，得到的表格用于绘制曼哈顿图   (What)
-
+# 此脚本把SV按每150kb进行统计，得到的表格用于绘制曼哈顿图   (What)
 * Aug 21, 2025                                  (When)
 * biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis (Where)
-                                                   (Why)
-就是参照Fujimoto的文章想统计下每150kb bin的断点数目，从而找出高频SV的区域.
+* 就是参照Fujimoto的文章想统计下每150kb bin的断点数目，从而找出高频SV的区域.                                               (Why)
 
 
-## 代码如下                                       (How)
 
+### 代码如下                                       (How)
+
+## 把所有sv弄成断点的形式
+具体来说，Manta得到的结果在经过那个INV的转化后，格式是DEL,DUP由一行记录，INV3/INV5由1行
+，BND由2行记录；在统计的区域内有多少sv时这样的格式是不方便的，所以把所有sv拆成
+类似bedpe的格式来进行统计会比较方便;本质上sv就是把两个位置拉到一起
+
+DUP和DEL和INV3和INV5以及BND(非reciprocal)均是拆成两个断点,所以计数没毛病
 ```
-########Fujimoto-data wash,得到Fujimoto-table1###########
-
-#note:和1中不同,这里脚本需要使用的是所有断点的POS，需要把所有突变弄成断点的形式
 load("~/1000_noncoding/3.SV_analysis/2.analysis/lc986_vcf_afterQC.Rdata")
 
 ##loading packages and files
@@ -58,8 +60,10 @@ if(1){
 
   df_split$POS <- as.numeric(df_split$POS)
   save(df_split,file="~/1000_noncoding/3.SV_analysis/2.analysis/lc986_breakpoints_afterQC.Rdata")
-  #1-2 计算每150000bp有多少个sample有断点
-  chrom_lengths <- c(
+```
+### 计算每150000bp有多少个sample有断点
+```
+chrom_lengths <- c(
     chr1 = 248956422, chr2 = 242193529, chr3 = 198295559, chr4 = 190214555,
     chr5 = 181538259, chr6 = 170805979, chr7 = 159345973, chr8 = 145138636,
     chr9 = 138394717, chr10 = 133797422, chr11 = 135086622, chr12 = 133275309,
@@ -163,10 +167,10 @@ if(1){
   result_complete3 <- all_intervals %>%
     left_join(result, by = c("CHROM", "start_pos", "end_pos"))
 
-  fujimoto_table3 <- result_complete1 %>%
+  df_bin_brks <- result_complete1 %>%
     left_join(result_complete2,by=c("CHROM", "start_pos", "end_pos")) %>%
     left_join(result_complete3,by=c("CHROM", "start_pos", "end_pos"))
-  save(fujimoto_table3,file = "~/1000_noncoding/3.SV_analysis/2.analysis/fujimoto_table3.Rdata")
+  save(df_bin_brks,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/3-1_df_bin_brks.Rdata")
 }
 ```
 得到的表格长这样(Result)
