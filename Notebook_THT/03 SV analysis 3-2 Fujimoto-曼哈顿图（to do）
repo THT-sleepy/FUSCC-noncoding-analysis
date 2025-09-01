@@ -125,8 +125,12 @@ dev.off()
 
 
                                                     (Result)
-只有brks>=15的结果被高亮展示了，其实就是一个描述性的东西吧，到时候就模仿fujimoto的文章介绍一下结果
+只有brks>=20（2%）的结果被高亮展示了，其实就是一个描述性的东西吧，到时候就模仿fujimoto的文章介绍一下结果
+如图所示，>2% sv的binoverlap的cancer相关基因就是这一些;ALK,TERT,MDM2,CDKN2A,CDKN2B是LUAD很常见的癌症相关基因
+其它几个基因写文章时要介绍一下背景;"CDH10"  "EEF1A1" "MTAP"   "CDKN2A" "CDKN2B"这几个是位于fragile sites的，
+但后两个也在说明位于fragile sites并不一定不是selection
+
+
 
 ## to do
-### 1 这个图的高亮有点问题，标红是15个样本，注释癌相关基因则是20个样本
 ### 2 后续主题要改一下，存储为pdf格式
