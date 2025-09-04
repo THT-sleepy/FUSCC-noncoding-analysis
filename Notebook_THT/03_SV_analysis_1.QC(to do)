@@ -179,6 +179,7 @@ p1_3 <- ggplot(df1, aes(x = purity, y = n)) +
 ### 其它文章LUAD sv每个样本看了下大概100出头这样子，我们的PR,SR标准严格一点均值是76（Result）
 
 # to do list
+## 0 要修正一下sv的计数(reciprocal算两个？)
 ## 1 比较一下不同分期总sv数量的差别以及各类型sv的差别
 ## 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)
 ## 3 sv类型和复制时间早晚的关系
