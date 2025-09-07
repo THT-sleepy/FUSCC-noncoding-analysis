@@ -2,7 +2,7 @@
 
 * Aug 23, 2025                                 (When)
 * biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
-* 对1000对的SV输出做一个质控(PR>=3,SR>=1),然后绘制一些概要图          (Why)
+* 对1000对的SV输出做一个质控(PR>=3,SR>=1)         (Why)
 
 
 ## 代码                                          (How)
@@ -176,11 +176,12 @@ p1_3 <- ggplot(df1, aes(x = purity, y = n)) +
 ```
 <img src=".\figures\03SV_QC_1000sv纯度和sv数量的关系.png">
 
-### 其它文章LUAD sv每个样本看了下大概100出头这样子，我们的PR,SR标准严格一点均值是76（Result）
+### 其它文章LUAD sv每个样本看了下大概100出头这样子，我们的PR,SR标准严格一点均值是54（Result）
 
 # to do list
-## 0 要修正一下sv的计数(reciprocal算两个？)
-## 1 比较一下不同分期总sv数量的差别以及各类型sv的差别
+## 0 要修正一下sv的计数(reciprocal算两个？)-done
+## 1 比较一下不同分期总sv数量的差别以及各类型sv的差别(箱线图+百分比柱状图)-done
 ## 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)
-## 3 sv类型和复制时间早晚的关系
-## 4 sv数量和临床指标的关系，和驱动突变以及TP53等突变的关系
+## 3 sv类型和复制时间早晚的关系-done
+## 4 sv数量和临床指标的关系，和驱动突变以及TP53等突变的关系-done
+## 5 sv数量类型和染色质可及性的关系
