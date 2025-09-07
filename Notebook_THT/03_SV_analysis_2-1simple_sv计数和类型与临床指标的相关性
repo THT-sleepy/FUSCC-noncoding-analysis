@@ -532,15 +532,12 @@ ggplot(df_percent, aes(x = Smoking_history_brief, y = percent, fill = STV)) +
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_7smoking_status百分比柱状图.pdf"
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
 ```
+<img src=".\figures\p2-1_6_svcount_smokingstatus.png">
+<img src=".\figures\p2-1_7smoking_status百分比柱状图.png">
+和预期一致，吸烟的更多。百分比没什么特殊的
 
-
-
-
-
-
-
-
-#7 分化和sv数量，类型的关系
+## 7 分化和sv数量，类型的关系
+```
 df <- df_simple_sv_count %>%
   mutate(Sample_ID=SAMPLE) %>%
   left_join(df_clin,by = c("Sample_ID")) %>%
@@ -633,8 +630,15 @@ ggplot(df_percent, aes(x = Differentiation, y = percent, fill = STV)) +
         plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_9_differentiationstatus百分比柱状图.pdf"
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+```
+<img src=".\figures\p2-1_8_svcount_differentionstatus.png">
+<img src=".\figures\p2-1_9differentiation_status百分比柱状图.png">
+和预期一致，分化越差sv数量越多。比较有意思的是从分化好到分化差DEL,DUP呈上升趋势，而TRA则呈现出下降趋势
 
-#8 CT和sv数量，类型的关系
+
+
+## 8 CT和sv数量，类型的关系
+```
 df <- df_simple_sv_count %>%
   mutate(Sample_ID=SAMPLE) %>%
   left_join(df_clin,by = c("Sample_ID")) %>%
@@ -722,8 +726,15 @@ ggplot(df_percent, aes(x = CT_presentation, y = percent, fill = STV)) +
         plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_11CT_status百分比柱状图.pdf"
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+```
+<img src=".\figures\p2-1_10_svcount_CTstatus.png">
+<img src=".\figures\p2-1_11CT_status百分比柱状图.png">
+和预期一致没啥特别的
 
-#9 sv数量高低的KM曲线(以中位数或平均数为界)
+
+
+## 9 sv数量高低的KM曲线(以中位数或平均数为界)
+```
 df <- df_simple_sv_count %>%
   mutate(Sample_ID=SAMPLE) %>%
   left_join(df_clin,by = c("Sample_ID")) %>%
@@ -754,8 +765,12 @@ ggsurvplot(km_rfs,
            pval=T,
            pval.method=T)
 dev.off()
+```
+<img src=".\figures\p2-1_12svcount_kmos.png">
+<img src=".\figures\p2-1_13svcount_kmrfs.png">
 
-#10 sv 数量和EGFR,KRAS,TP53突变的关系
+## 10 sv 数量和EGFR,KRAS,TP53突变的关系
+```
 mut <- coding_maf %>%
   filter(Hugo_Symbol %in% c("KRAS","TP53","EGFR"),ONCOGENIC %in% c("Oncogenic","Likely Oncogenic")) %>%
   mutate(status="Mut") %>%
@@ -1110,3 +1125,19 @@ ggplot(df_percent, aes(x = TP53, y = percent, fill = STV)) +
         plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_18TP53_status百分比柱状图.pdf"
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+```
+<img src=".\figures\p2-1_13.5_svcount_EGFRstatus.png">
+<img src=".\figures\p2-1_14EGFR_status百分比柱状图.png">
+<img src=".\figures\p2-1_15_svcount_KRASstatus.png">
+<img src=".\figures\p2-1_16KRAS_status百分比柱状图.png">
+<img src=".\figures\p2-1_17_svcount_TP53status.png">
+<img src=".\figures\p2-1_18TP53_status百分比柱状图.png">
+EGFR和TP53突变者sv数量更高，百分比没什么特别的
+
+                                                  (Result)  
+* 在PR>=3,SR>=1的条件下一共894/986检测到了1-2644个sv junction，均数为54.47。其中INV最多为18257，Tandem DUP最少为8897个。
+* sv数量和肿瘤纯度高度相关，说明sv检测的敏感性受肿瘤纯度的影响还是蛮大的。
+* 和预期一致，sv数量和浸润情况，吸烟，分化，CT分型均是正相关的
+* 和预期一致 sv高组预后更差
+* 各sv类型组成上，浸润相对于浸润前病变，TRA占比显著更高而INV占比则有所下降；比较有意思的是从分化好到分化差DEL，DUP的占比呈上升趋势而TRA则呈下降趋势
+* sv数量与常见驱动突变也是相关的，EGFR和TP53突变者sv数量更高,KRAS则无明显差异。TP53突变者染色体不稳定性更高，sv数量更多是合理的。但为什么EGFR突变者sv数量也更多呢？可能后面需要做一个sv数量的多因素回归分析
