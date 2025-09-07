@@ -1,4 +1,4 @@
-# 分析simple sv(DEL,DUP,TRA,INV)数量与其它指标的关系            (What)
+# 分析simple sv(DEL,DUP,TRA,INV)junction数量与其它指标的关系            (What)
 
 * Sep 7, 2025                                 (When)
 * biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
@@ -7,9 +7,8 @@
 
 ## 代码                                          (How)
 
-#此脚本用于分析simple sv junction计数与其它指标的关系
-
-##loading packages
+## loading packages
+```
 library(dplyr)
 library(tidyr)
 library(patchwork)  # 用于拼接图形
@@ -18,9 +17,10 @@ library(RColorBrewer)
 library(ggpubr)
 library(survminer)
 library(survival)
-
+```
 
 ##loading files
+```
 load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_vcf_afterQC.Rdata") #all_vcf_data
 load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/config_986.Rdata")
 purity_path <- "~/1000_noncoding/信息源文件/tumor_purity_20230405.csv"
@@ -29,9 +29,11 @@ clin_path <- "~/1000_noncoding/3.SV_analysis/1.resources/clin_info_1000_with_pat
 df_clin <- read.delim(clin_path)
 df_clin <- df_clin[,c(1:30)]
 coding_maf <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/new_mut_fus_combined.txt")
+```
 
-##计数junction,TRA因为是以断点格式记录的最后需要除以2
 
+## 计数junction,TRA因为是以断点格式记录的最后需要除以2
+```
 # 创建一个函数来判断变异类型
 get_sv_type <- function(sv_id) {
   if (grepl("BND", sv_id)) {
@@ -48,7 +50,6 @@ get_sv_type <- function(sv_id) {
     return("Unknown")  # 处理无法识别的类型
   }
 }
-
 # 应用函数添加变异类型列
 all_vcf_data$SV_TYPE_LONG <- sapply(all_vcf_data$ID, get_sv_type)
 
@@ -70,16 +71,21 @@ df_simple_sv_count <- all_samples %>%
 # 将所有NA值替换为0（缺失样本的变异类型计数）
 df_simple_sv_count[is.na(df_simple_sv_count)] <- 0
 save(df_simple_sv_count,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/df_simple_sv_count.Rdata")
+```
 
-##统计分析
+
+## 统计分析
+### 1总数的分布
+```
 load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/df_simple_sv_count.Rdata")
 
-#1 总数的分布
 summary(df_simple_sv_count$total_count)
 #Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
 #0.00    7.00   28.50   54.47   75.00 2644.00
+```
 
-#2 排序柱状图
+### 2 排序柱状图
+```
 df_processed <- df_simple_sv_count %>%
    pivot_longer(cols = c("Deletion",
         "Interchromosomal Translocation",
@@ -243,8 +249,13 @@ ggsave(filename,device = "pdf",width = 18 ,height = 9)
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_1排序柱状图part2.pdf"
 plot6 / plot7 / plot8 / plot9 / plot10
 ggsave(filename,device = "pdf",width = 18 ,height = 9)
+```
+<img src=".\figures\p2-1_1排序柱状图part1.png">
+<img src=".\figures\p2-1_1排序柱状图part2.png">
 
-#3 分类柱状图
+
+## 3 分类柱状图
+```
 df  <- df_simple_sv_count %>%
   pivot_longer(cols = c("Deletion",
                         "Interchromosomal Translocation",
@@ -292,8 +303,13 @@ ggplot(df, aes(x = SV_TYPE,y=count,fill = SV_TYPE)) +
   )
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_2分类柱状图.pdf"
 ggsave(filename,device = "pdf",width = 8,height = 6)
+```
+<img src=".\figures\p2-1_2分类柱状图.png">  
 
-#4 查看purity和计数的关系-相关性曲线
+INV最多，Tandem DUP最少
+
+## 4 查看purity和计数的关系-相关性曲线
+```
 df <- df_simple_sv_count %>%
   mutate(sample_id = SAMPLE) %>%
   left_join(df_purity,by =c("sample_id")) %>%
@@ -321,8 +337,16 @@ ggplot(df1, aes(x = purity, y = total_count)) +
         axis.title = element_text(size = 15))
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_3cor_between_n_purity.pdf"
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+```
+<img src=".\figures\p2-1_3cor_between_n_purity.png">  
 
-#5 查看分期与sv数量和类型的关系-为了好看把那个样本数特别多的样本去掉
+和预期一致，检测出的STV的数量和肿瘤纯度强相关
+
+
+
+
+## 5 查看分期与sv数量和类型的关系-为了好看把那个样本数特别多的样本去掉
+```
 ###因为III-IV期其实比II期的sv数量少，就换成了直接比preinvasive和invasive
 df <- df_simple_sv_count %>%
   mutate(Sample_ID=SAMPLE) %>%
@@ -412,8 +436,16 @@ ggplot(df_percent, aes(x = Stage2, y = percent, fill = STV)) +
         plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_5Invasive_status百分比柱状图.pdf"
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+```
+<img src=".\figures\p2-1_4_svcount_invasivestatus.png">
+<img src=".\figures\p2-1_5Invasive_status百分比柱状图.png">  
 
-#6 吸烟和sv数量，类型的关系
+和预期一致，Invasive阶段sv数量更多。百分比上，从Preinvasive到Invasive，DEL变化不大，
+TRA有大幅升高，INV降低，DUP有小幅下降
+
+
+## 6 吸烟和sv数量，类型的关系
+```
 df <- df_simple_sv_count %>%
   mutate(Sample_ID=SAMPLE) %>%
   left_join(df_clin,by = c("Sample_ID")) %>%
@@ -499,6 +531,13 @@ ggplot(df_percent, aes(x = Smoking_history_brief, y = percent, fill = STV)) +
         plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
 filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_7smoking_status百分比柱状图.pdf"
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+```
+
+
+
+
+
+
 
 
 #7 分化和sv数量，类型的关系
