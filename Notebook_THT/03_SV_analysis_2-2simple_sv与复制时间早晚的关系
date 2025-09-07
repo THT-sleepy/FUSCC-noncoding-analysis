@@ -1,0 +1,218 @@
+# 分析各simple sv类型与DNA复制时间早晚的关系           (What)
+
+* Sep 7, 2025                                 (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
+* 看下哪些特征是和simple sv相关的 (Why)
+
+
+## 代码                                          (How)
+
+```
+##此脚本首先根据gencode来源的文件(see methods)构建复制时间早晚的信息
+##然后再分析simple sv与复制时间早晚的关系
+
+##这一步是解决后面normalize.quantiles.use.target()函数的报错
+#设置禁用线程的配置参数：
+configure.args <- c(preprocessCore = "--disable-threading")
+options(configure.args = configure.args)
+#重新安装 preprocessCore 包：
+renv::install("bioc::preprocessCore", rebuild = TRUE, force = TRUE, update = TRUE, type = "source")
+
+
+#step1 得到复制早晚时间的信息
+library(preprocessCore)
+setwd("~/1000_noncoding/3.SV_analysis/1.resources/")
+merge<-read.table("merge_RT.txt", header=FALSE)
+colnames(merge)<- c(c("chr","start","end"),list.files(path=".",pattern="*T_.bg"))
+merge_values<-as.matrix(merge[,4:ncol(merge)])
+ad<-merge[,"A549_T_.bg"]
+norm_data<-normalize.quantiles.use.target(merge_values,ad)
+merge_norm<-data.frame(merge[,1:3],norm_data)
+colnames(merge_norm)<-colnames(merge)
+
+for(i in 4:ncol(merge_norm)){write.table(merge_norm[complete.cases(merge_norm[,i]), c(1,2,3,i)],
+             gsub(".bg", "qnorm.bedGraph", colnames(merge_norm)[i]),
+             sep="\t",row.names=FALSE, quote=FALSE, col.names=FALSE)}
+chrs=grep(unique(merge_norm$chr),pattern="[_YM]",invert=TRUE,value=TRUE)
+
+AllLoess=list()
+
+for(i in 1:(ncol(merge_norm)-3)){
+  AllLoess[[i]]=data.frame();
+  cat("Current dataset:", colnames(merge_norm)[i+3], "\n");
+  for(Chr in chrs){
+    RTb=subset(merge_norm, merge_norm$chr==Chr);
+    lspan=300000/(max(RTb$start)-min(RTb$start));
+    cat("Current chrom:", Chr, "\n");
+    RTla=loess(RTb[,i+3] ~ RTb$start, span=lspan);
+    RTl=data.frame(c(rep(Chr,times=RTla$n)), RTla$x,
+                   merge_norm[which(merge_norm$chr==Chr & merge_norm$start %in%
+                                      RTla$x),3],RTla$fitted);
+    colnames(RTl)=c("chr","start","end",colnames(RTb)[i+3]);
+    if(length(AllLoess[[i]])!=0){
+      AllLoess[[i]]=rbind(AllLoess[[i]],RTl)};
+    if(length(AllLoess[[i]])==0){
+      AllLoess[[i]]=RTl}}}
+
+for(i in 1:length(AllLoess)){write.table(AllLoess[[i]][complete.cases(AllLoess[[i]]),],
+                                         gsub(".bg","Loess.bedGraph",colnames(AllLoess[[i]]))[4], sep="\t", row.names=FALSE, quote=FALSE,
+                                         col.names=FALSE)}
+
+#step2 得到simple sv与复制时间的关系
+
+##loading packages
+library(dplyr)
+library(tidyr)
+library(GenomicRanges)
+library(ggplot2)
+
+##loading files
+###vcf
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_vcf_afterQC.Rdata")
+
+###得到复制时间文件
+df_A549_repli_bg <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/A549_T_Loess.bedGraph",header = F)
+colnames(df_A549_repli_bg) <- c("chr","start","end","value")
+
+
+##整理数据
+###按照Fujimoto的做法，把bins(50kb)按从早到晚分为5组(每一组包含的bin的数目一样)
+num_groups <- 5  # 目标分组数（固定为5组）
+total_rows <- nrow(df_A549_repli_bg)  # 数据总行数（此处为22行）
+base_rows <- total_rows %/% num_groups  # 每组基础行数（22÷5=4行）
+remainder <- total_rows %% num_groups  # 多余行数（22%5=2行，需分给最后一组）
+df_A549_repli_bg_grouped <- df_A549_repli_bg %>%
+  # 步骤1：按第四列数值从小到大排序（负数自动排在前面）
+  arrange(.[[4]]) %>%  # .[[4]] 直接引用第四列，无需知道列名
+  # 步骤2：生成分组标识（前n-1组为基础行数，最后一组含基础行数+余数）
+  mutate(
+    group_id = case_when(
+      # 前(num_groups-1)组：每组base_rows行（如前4组各4行）
+      row_number() <= (num_groups - 1) * base_rows ~ ceiling(row_number() / base_rows),
+      # 最后1组：包含剩余所有行（第17-22行，共6行）
+      TRUE ~ num_groups  # 直接指定最后一组的标识为“5”
+    )
+  ) %>%
+  # 步骤3：按分组计算每组的数值区间（group_name为该组专属区间）
+  group_by(group_id) %>%
+  mutate(
+    group_min = min(value),  # 该组内第四列的最小值
+    group_max = max(value),  # 该组内第四列的最大值
+    group_name = sprintf("[%.2f, %.2f]", group_min, group_max)  # 区间格式（保留2位小数）
+  ) %>%
+  ungroup() %>%
+  # 步骤4：清理临时列，调整列顺序（group_name移到最前面，便于查看）
+  select(-group_id, -group_min, -group_max) %>%
+  relocate(group_name)
+
+###将所有突变拆成断点形式
+df <- all_vcf_data
+df_split <- df %>%
+  # 使用mutate判断INFO列中是否包含END，并进行拆分
+  rowwise() %>%
+  mutate(
+    INFO_split = strsplit(INFO, ";")
+  ) %>%
+  unnest(INFO_split) %>%
+  filter(grepl("\\bEND=\\b", INFO_split)) %>%
+  mutate(
+    POS = sub("END=", "", INFO_split),
+    INFO = "END="  # 新行INFO列保持为END=xxx
+  ) %>%
+  select(CHROM, POS, INFO, SAMPLE,SV_ID) %>%
+  bind_rows(
+    df %>%
+      select(CHROM, POS, INFO, SAMPLE,SV_ID)
+  ) %>%
+  arrange(CHROM, POS)
+df_split$POS <- as.numeric(df_split$POS)
+get_sv_type <- function(sv_id) {
+  if (grepl("BND", sv_id)) {
+    return("Interchromosomal Translocation")
+  } else if (grepl("DUP", sv_id)) {
+    return("Tandem Duplication")
+  } else if (grepl("INV", sv_id)) {
+    return("Inversion")
+  } else if (grepl("DEL", sv_id)) {
+    return("Deletion")
+  } else if (grepl("INS", sv_id)) {
+    return("Insertion")
+  } else {
+    return("Unknown")  # 处理无法识别的类型
+  }
+}
+
+### 应用函数添加变异类型列
+df_split$SV_TYPE <- sapply(df_split$SV_ID, get_sv_type)
+
+### overlap
+### 创建 GRanges 对象表示50kb区间
+gr_intervals <- GRanges(
+  seqnames = df_A549_repli_bg_grouped$chr,
+  ranges = IRanges(start = df_A549_repli_bg_grouped$start+1, end = df_A549_repli_bg_grouped$end)
+)
+
+### 创建 GRanges 对象表示突变位置
+gr_mutations <- GRanges(
+  seqnames = df_split$CHROM,
+  ranges = IRanges(start = df_split$POS, end = df_split$POS)
+)
+
+### 使用 findOverlaps 查找重叠的区间
+overlaps <- findOverlaps(gr_mutations, gr_intervals)
+
+### 提取重叠的突变和区间信息
+overlap_data <- data.frame(
+  mutation_index = queryHits(overlaps),
+  interval_index = subjectHits(overlaps)
+)
+
+### 将突变和区间数据合并
+result <- cbind(df_A549_repli_bg_grouped[overlap_data$interval_index, ],df_split[overlap_data$mutation_index, ])
+
+df_plot <- result %>%
+  select(group_name,SV_TYPE) %>%
+  # 第一步：计算每个分类的总数量（跨所有组）
+  group_by(SV_TYPE) %>%
+  mutate(total_SV_TYPE = n()) %>%
+  ungroup() %>%
+  # 第二步：计算每组中每个分类的数量和比例
+  group_by(group_name, SV_TYPE) %>%
+  summarise(
+    count = n(),  # 组内该分类的数量
+    proportion = count / total_SV_TYPE  # 计算比例
+  ) %>%
+  ungroup() %>%
+  distinct() %>%
+  filter(SV_TYPE!="Insertion")
+df_plot$group_name <- factor(df_plot$group_name,levels = c("[3.30, 12.80]",
+                                                           "[0.54, 3.30]" ,
+                                                           "[-2.06, 0.54]",
+                                                           "[-3.32, -2.06]",
+                                                           "[-7.01, -3.32]"))
+ggplot(df_plot,aes(x=group_name,y=proportion,fill = SV_TYPE)) +
+  geom_bar(stat="identity",position = "dodge")+
+  theme_bw()+
+  labs(y="Proportion",x="")+
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  geom_hline(
+    yintercept = 0.2,    # 辅助线位置（y=0.2）
+    color = "black",     # 颜色：黑色
+    linetype = 2,        # 线型：虚线（1=实线，2=虚线，3=点线等）
+    linewidth = 0.8      # 线宽（可选，增强可读性）
+  )+
+  scale_x_discrete(
+    #breaks = levels(df_discrete$x),  # 保留5个原始break（Group1-Group5）
+    labels = c("Early", "", "", "", "Late")
+  )+
+  theme(axis.title.y = element_text(size = 14),
+        axis.text.x = element_text(size = 14))
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/sv_type_vs_replicationtime.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+```

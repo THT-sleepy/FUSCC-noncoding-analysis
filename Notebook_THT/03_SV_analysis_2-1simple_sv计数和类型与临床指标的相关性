@@ -1,0 +1,1073 @@
+# 分析simple sv(DEL,DUP,TRA,INV)数量与其它指标的关系            (What)
+
+* Sep 7, 2025                                 (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
+* 看下哪些特征是和simple sv相关的 (Why)
+
+
+## 代码                                          (How)
+
+#此脚本用于分析simple sv junction计数与其它指标的关系
+
+##loading packages
+library(dplyr)
+library(tidyr)
+library(patchwork)  # 用于拼接图形
+library(ggplot2)
+library(RColorBrewer)
+library(ggpubr)
+library(survminer)
+library(survival)
+
+
+##loading files
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_vcf_afterQC.Rdata") #all_vcf_data
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/config_986.Rdata")
+purity_path <- "~/1000_noncoding/信息源文件/tumor_purity_20230405.csv"
+df_purity <- read.csv(purity_path) #820个样本有这个信息
+clin_path <- "~/1000_noncoding/3.SV_analysis/1.resources/clin_info_1000_with_pathway_with_gene.txt"
+df_clin <- read.delim(clin_path)
+df_clin <- df_clin[,c(1:30)]
+coding_maf <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/new_mut_fus_combined.txt")
+
+##计数junction,TRA因为是以断点格式记录的最后需要除以2
+
+# 创建一个函数来判断变异类型
+get_sv_type <- function(sv_id) {
+  if (grepl("BND", sv_id)) {
+    return("Interchromosomal Translocation")
+  } else if (grepl("DUP", sv_id)) {
+    return("Tandem Duplication")
+  } else if (grepl("INV", sv_id)) {
+    return("Inversion")
+  } else if (grepl("DEL", sv_id)) {
+    return("Deletion")
+  } else if (grepl("INS", sv_id)) {
+    return("Insertion")
+  } else {
+    return("Unknown")  # 处理无法识别的类型
+  }
+}
+
+# 应用函数添加变异类型列
+all_vcf_data$SV_TYPE_LONG <- sapply(all_vcf_data$ID, get_sv_type)
+
+result <- all_vcf_data %>%
+  group_by(SAMPLE, SV_TYPE_LONG) %>%
+  summarise(COUNT = n(), .groups = "drop") %>%
+  pivot_wider(names_from = SV_TYPE_LONG, values_from = COUNT, values_fill = 0) %>%
+  mutate(`Interchromosomal Translocation`=`Interchromosomal Translocation`/2) %>% ###TRA需要除以2
+  select(-Insertion) %>% ###去掉Insertion,就1个也没啥好解释的
+  # 添加总计数列，计算每行所有变异类型的总和
+  mutate(total_count = rowSums(select(., -SAMPLE)))  # 排除SAMPLE列计算总和
+
+#创建包含所有986个样本的完整数据框
+all_samples <- data.frame(SAMPLE = config_986)
+
+# 将结果与完整样本列表进行左连接，缺失样本的变异类型会自动填充为NA
+df_simple_sv_count <- all_samples %>%
+  left_join(result, by = "SAMPLE")
+# 将所有NA值替换为0（缺失样本的变异类型计数）
+df_simple_sv_count[is.na(df_simple_sv_count)] <- 0
+save(df_simple_sv_count,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/df_simple_sv_count.Rdata")
+
+##统计分析
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/df_simple_sv_count.Rdata")
+
+#1 总数的分布
+summary(df_simple_sv_count$total_count)
+#Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+#0.00    7.00   28.50   54.47   75.00 2644.00
+
+#2 排序柱状图
+df_processed <- df_simple_sv_count %>%
+   pivot_longer(cols = c("Deletion",
+        "Interchromosomal Translocation",
+        "Inversion",
+        "Tandem Duplication"),names_to = "SV_TYPE",values_to = "count") %>%
+  mutate(total=total_count) %>%
+  select(-total_count) %>%
+  filter(total!=0)
+
+###分离最大样本与剩余样本
+max_sample <- "7035LC"
+
+max_sample_data <- filter(df_processed, SAMPLE == max_sample)
+max_sample_data$group <- "Group 0"
+remaining_data <- filter(df_processed, SAMPLE != max_sample)
+
+###剩余样本分为10组（修复分组长度不匹配问题）
+### 获取唯一的剩余样本列表
+remaining_samples <- unique(remaining_data$SAMPLE)
+n_remaining <- length(remaining_samples)
+cat("剩余样本数量:", n_remaining, "\n")
+
+### 为每个唯一样本计算总变异数（用于排序）
+sample_totals <- df_processed %>%
+  filter(SAMPLE %in% remaining_samples) %>%
+  distinct(SAMPLE, total) %>%
+  arrange(desc(total))
+
+### 正确的分组分配方法（确保长度匹配）
+group_labels <- paste0("Group ", 1:10)
+sample_totals <- sample_totals %>%
+  mutate(
+    # 按样本数量均匀分成10组
+    group = rep(group_labels, each = ceiling(n_remaining / 10))[1:n_remaining]
+  )
+
+### 现在样本与分组数量完全匹配
+remaining_sample_df <- sample_totals %>% select(SAMPLE, group)
+cat("分组数据框维度:", dim(remaining_sample_df), "\n")
+
+### 合并组别信息
+remaining_data <- remaining_data %>%
+  inner_join(remaining_sample_df, by = "SAMPLE") %>%
+  arrange(desc(total))
+
+### 确保10个组都存在
+all_groups <- data.frame(group = group_labels)
+remaining_data <- remaining_data %>%
+  full_join(all_groups, by = "group") %>%
+  mutate(
+    count = ifelse(is.na(count), 0, count),
+    total = ifelse(is.na(total), 0, total),
+    SAMPLE = ifelse(is.na(SAMPLE), paste0(group, "_NA"), SAMPLE)
+  )
+
+### 检查分组情况
+group_check <- remaining_data %>%
+  distinct(SAMPLE, group) %>%
+  count(group, name = "sample_count")
+print("各组样本数量：")
+print(group_check)
+
+###绘图函数
+create_plot <- function(data, plot_title, show_legend = FALSE, show_y_title = FALSE) {
+  data_sorted <- data %>%
+    distinct(SAMPLE, total, group) %>%
+    arrange(desc(total)) %>%
+    inner_join(data, by = c("SAMPLE", "total", "group"))
+
+  if(nrow(data_sorted) == 0) {
+    data_sorted <- data.frame(
+      SAMPLE = "No Data",
+      SV_TYPE = unique(df_processed$SV_TYPE)[1],
+      count = 0,
+      total = 0
+    )
+  }
+
+  # 定义图例横向排列的主题元素
+  legend_theme <- if(show_legend) {
+    list(
+      legend.position = c(0.95, 0.95),  # 右上角位置（0-1范围，相对于图形）
+      legend.justification = c("right", "top"),  # 图例锚点
+      legend.direction = "horizontal",  # 横向排列
+      legend.box = "horizontal",        # 图例框横向
+      legend.key.width = unit(30, "pt"), # 图例符号宽度
+      legend.key.height = unit(15, "pt"),# 图例符号高度
+      legend.margin = margin(t = 0, r = 0, b = 0, l = 0), # 图例边距
+      legend.background = element_rect(fill = "white", color = NA), # 半透明白色背景
+      legend.text = element_text(size = 10) # 图例文字大小
+    )
+  } else {
+    list(legend.position = "none")
+  }
+
+  ggplot(data_sorted, aes(x = reorder(SAMPLE, -total), y = count, fill = SV_TYPE)) +
+    geom_col(width = 0.8) +
+    labs(
+      x = NULL,
+      y = ifelse(show_y_title, "Number of junctions", ""),
+      title = ""
+    ) +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+      panel.grid.minor = element_line(color = "gray95", linewidth = 0.1),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 0.5),
+      axis.title.x = element_blank(),
+      axis.title.y = element_text(size = 12),
+      axis.text.x = element_text(
+        angle = 45,        # 旋转45度
+        vjust = 1,         # 垂直对齐调整
+        hjust = 1,         # 水平对齐调整（避免标签溢出）
+        size = 8           # 字体大小，可根据需要调整
+      ),
+      axis.ticks.x = element_blank(),
+      legend.position = ifelse(show_legend, "right", "none"),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      plot.margin = margin(t = 5, r = 10, b = 5, l = 10, unit = "pt")
+    ) +
+    # 添加图例主题设置
+    do.call(theme, legend_theme) +
+    scale_fill_manual(values = c(
+      "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+      "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+      "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+      "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+      "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+    ))
+}
+
+###绘制图形
+plot_max <- create_plot(
+  max_sample_data,
+  "Largest Sample",
+  show_legend = FALSE,
+  show_y_title = TRUE
+)
+
+plot_data_list <- lapply(group_labels, function(g) {
+  filter(remaining_data, group == g)
+})
+
+plot1 <- create_plot(plot_data_list[[1]], "Group 1",show_legend = T)
+plot2 <- create_plot(plot_data_list[[2]], "Group 2")
+plot3 <- create_plot(plot_data_list[[3]], "Group 3")
+plot4 <- create_plot(plot_data_list[[4]], "Group 4")
+plot5 <- create_plot(plot_data_list[[5]], "Group 5")
+plot6 <- create_plot(plot_data_list[[6]], "Group 6")
+plot7 <- create_plot(plot_data_list[[7]], "Group 7")
+plot8 <- create_plot(plot_data_list[[8]], "Group 8")
+plot9 <- create_plot(plot_data_list[[9]], "Group 9")
+plot10 <- create_plot(plot_data_list[[10]], "Group 10")
+
+###组合图形
+###part1
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_1排序柱状图part1.pdf"
+((plot_max + plot1) + plot_layout(widths = c(1, 50))) / plot2 / plot3 / plot4 / plot5
+ggsave(filename,device = "pdf",width = 18 ,height = 9)
+###part2
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_1排序柱状图part2.pdf"
+plot6 / plot7 / plot8 / plot9 / plot10
+ggsave(filename,device = "pdf",width = 18 ,height = 9)
+
+#3 分类柱状图
+df  <- df_simple_sv_count %>%
+  pivot_longer(cols = c("Deletion",
+                        "Interchromosomal Translocation",
+                        "Inversion",
+                        "Tandem Duplication"),names_to = "SV_TYPE",values_to = "count") %>%
+  group_by(SV_TYPE) %>%
+  mutate(count=sum(count)) %>%
+  select(SV_TYPE,count) %>%
+  distinct
+
+df <- df %>% mutate(
+  # 手动在"Interchromosomal"和"Translocation"之间插入换行
+  SV_TYPE = ifelse(
+    SV_TYPE == "Interchromosomal Translocation",
+    "Interchromosomal\nTranslocation",  # 使用\n插入换行
+    SV_TYPE
+  )
+)
+ggplot(df, aes(x = SV_TYPE,y=count,fill = SV_TYPE)) +
+  geom_bar(stat="identity") +
+  theme_bw()+
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal\nTranslocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  labs(x="",y="",title = "") +
+  geom_text(
+    aes(label = count),  # 显示count值
+    vjust = -0.5,       # 垂直位置：在柱子顶部上方（负值向上）
+    hjust = 0.5,        # 水平居中
+    size = 5,         # 字体大小
+    color = "black"     # 字体颜色
+  ) +
+  theme(
+    #plot.tag = element_text(size = 16, face = "bold"),
+    #plot.title = element_text(size = 16, face = "bold"),  # 标题加粗并增大字体
+    axis.title.x = element_text(size = 14, face = "bold"),  # 横坐标加粗并增大字体
+    axis.title.y = element_text(size = 14, face = "bold"),   # 纵坐标加粗并增大字体
+    axis.text.x = element_text(size = 12, face = "bold"),  # 横坐标字体加大加粗
+    axis.text.y = element_text(size = 12, face = "bold"),  # 纵坐标字体加大加粗
+    legend.position = "none"
+  )
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_2分类柱状图.pdf"
+ggsave(filename,device = "pdf",width = 8,height = 6)
+
+#4 查看purity和计数的关系-相关性曲线
+df <- df_simple_sv_count %>%
+  mutate(sample_id = SAMPLE) %>%
+  left_join(df_purity,by =c("sample_id")) %>%
+  select(-sample_id)
+df1 <- na.omit(df)
+
+### 计算相关系数和p值
+cor_test <- cor.test(df1$purity, df1$total_count)
+correlation <- cor_test$estimate  # 相关系数
+p_value <- cor_test$p.value      # p值
+ggplot(df1, aes(x = purity, y = total_count)) +
+  geom_point(size = 2.5) +
+  geom_smooth(method = lm, se = TRUE, fill = "#E9B99B",color="#DD7B52") +
+  labs(y = "Number of STVs", x = "Purity", title = "") +
+  annotate("text", x = 0.9, y = 2250,
+           label = paste("Correlation: ", round(correlation, 2),
+                         "\np-value: ", format(p_value, digits = 3)),
+           color = "black", size = 5) +  # 显示相关系数p
+  theme_bw() +
+  theme(legend.position = "none") + #移除图例
+  theme(strip.text = element_text(size = 16)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        plot.caption = element_text(size = 12),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 15))
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_3cor_between_n_purity.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+#5 查看分期与sv数量和类型的关系-为了好看把那个样本数特别多的样本去掉
+###因为III-IV期其实比II期的sv数量少，就换成了直接比preinvasive和invasive
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  filter(SAMPLE!="7035LC")
+df$Stage2 <- factor(df$Stage2,levels=c("Preinvasive","Invasive"))
+
+#df$Stage4 <- ifelse(df$Stage3 %in% c("III","IV"),"III/IV",df$Stage3)
+
+p <- ggplot(df,aes(x=Stage2,y=total_count,fill=Stage2))+ #”fill=“设置填充颜色
+  stat_boxplot(geom = "errorbar",width=0.15,aes(color="black"))+ #由于自带的箱形图没有胡须末端没有短横线，使用误差条的方式补上
+  geom_boxplot(size=0.5,fill="white",outlier.fill="white",outlier.color="white")+ #size设置箱线图的边框线和胡须的线宽度，fill设置填充颜色，outlier.fill和outlier.color设置异常点的属性
+  geom_jitter(aes(fill=Stage2),width =0.2,shape = 21,size=2.5)+ #设置为向水平方向抖动的散点图，width指定了向水平方向抖动，不改变纵轴的值
+  scale_fill_manual(values = c("#4D779B", "#CD3842"))+  #设置填充的颜色
+  scale_color_manual(values=c("black","black","black"))+ #设置散点图的圆圈的颜色为黑色
+  ggtitle("")+ #设置总的标题
+  theme_bw()+ #背景变为白色
+  scale_x_discrete(
+    labels = c(paste0("Preinvasive\n(N=",length(unique(df$SAMPLE[df$Stage2=="Preinvasive"])),")"),
+               paste0("Invasive\n(N=",length(unique(df$SAMPLE[df$Stage2=="Invasive"])),")"))
+  ) +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))+ #设置总标题的字体属性
+  ylab("Number of junctions")+xlab("") #设置x轴和y轴的标题
+my_comparisons <- list(c("Preinvasive","Invasive"))
+p+stat_compare_means(comparisons = my_comparisons,
+                           label.y = c(max(df$total_count)+0.5,max(df$total_count)+2.5))+ #默认就是wilconx秩和检验
+  theme()
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_4_svcount_invasivestatus.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+###百分比柱状图
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID"))
+### 将数据从宽格式转换为长格式，方便绘图
+df_long <- df %>%
+  pivot_longer(
+    cols = c(Deletion, `Interchromosomal Translocation`, `Tandem Duplication`, Inversion),
+    names_to = "STV",  # 新列，存储结构变异类型
+    values_to = "count"  # 新列，存储对应类型的数目
+  )
+
+### 计算每个分期下各STV的百分比
+df_percent <- df_long %>%
+  group_by(Stage2, STV) %>%
+  summarise(total = sum(count), .groups = "drop") %>%  # 计算每个分期下各STV的总数
+  group_by(Stage2) %>%
+  mutate(percent = total / sum(total) * 100)  # 计算百分比
+df_percent$Stage2 <- factor(df_percent$Stage2,levels = c("Preinvasive","Invasive"))
+### 绘制百分比柱状图
+ggplot(df_percent, aes(x = Stage2, y = percent, fill = STV)) +
+  geom_col(position = "dodge", width = 0.7) +  # 使用dodge参数让柱子并排显示
+  geom_text(
+    aes(label = sprintf("%.1f%%", percent)),  # 显示百分比标签
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 5
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+#背景变为白色
+  scale_x_discrete(
+    labels = c(paste0("Preinvasive\n(N=",length(unique(df$SAMPLE[df$Stage2=="Preinvasive"])),")"),
+               paste0("Invasive\n(N=",length(unique(df$SAMPLE[df$Stage2=="Invasive"])),")"))
+  ) +
+  labs(
+    x = "",
+    y = "Percent(%)",
+    fill = "",
+    title = ""
+  ) +
+  ylim(0, max(df_percent$percent) + 10) +  # 调整y轴范围，避免标签被截断
+  theme_bw() +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14,face = "bold"), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_5Invasive_status百分比柱状图.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+#6 吸烟和sv数量，类型的关系
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  filter(SAMPLE!="7035LC")
+df$Smoking_history_brief <- factor(df$Smoking_history_brief,levels=c("Never","Former/current"))
+p <- ggplot(df,aes(x=Smoking_history_brief,y=total_count,fill=Smoking_history_brief))+ #”fill=“设置填充颜色
+  stat_boxplot(geom = "errorbar",width=0.15,aes(color="black"))+ #由于自带的箱形图没有胡须末端没有短横线，使用误差条的方式补上
+  geom_boxplot(size=0.5,fill="white",outlier.fill="white",outlier.color="white")+ #size设置箱线图的边框线和胡须的线宽度，fill设置填充颜色，outlier.fill和outlier.color设置异常点的属性
+  geom_jitter(aes(fill=Smoking_history_brief),width =0.2,shape = 21,size=2.5)+ #设置为向水平方向抖动的散点图，width指定了向水平方向抖动，不改变纵轴的值
+  scale_fill_manual(values = c("#4D779B", "#CD3842"))+  #设置填充的颜色
+  scale_color_manual(values=c("black","black","black"))+ #设置散点图的圆圈的颜色为黑色
+  ggtitle("")+ #设置总的标题
+  scale_x_discrete(
+    labels = c(paste0("Never\n(N=",length(unique(df$SAMPLE[df$Smoking_history_brief=="Never"])),")"),
+               paste0("Former/current\n(N=",length(unique(df$SAMPLE[df$Smoking_history_brief=="Former/current"])),")"))
+  ) +
+  theme_bw()+ #背景变为白色
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))+ #设置总标题的字体属性
+  ylab("Number of junctions")+xlab("") #设置x轴和y轴的标题
+my_comparisons <- list(c("Never","Former/current"))
+p+stat_compare_means(comparisons = my_comparisons,
+                     label.y = c(max(df$total_count)+0.5,max(df$total_count)+2.5))+ #默认就是wilconx秩和检验
+  theme()
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_6_svcount_smokingstatus.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+###百分比柱状图
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID"))
+### 将数据从宽格式转换为长格式，方便绘图
+df_long <- df %>%
+  pivot_longer(
+    cols = c(Deletion, `Interchromosomal Translocation`, `Tandem Duplication`, Inversion),
+    names_to = "STV",  # 新列，存储结构变异类型
+    values_to = "count"  # 新列，存储对应类型的数目
+  )
+
+### 计算每个分期下各STV的百分比
+df_percent <- df_long %>%
+  group_by(Smoking_history_brief, STV) %>%
+  summarise(total = sum(count), .groups = "drop") %>%  # 计算每个分期下各STV的总数
+  group_by(Smoking_history_brief) %>%
+  mutate(percent = total / sum(total) * 100)  # 计算百分比
+df_percent$Smoking_history_brief <- factor(df_percent$Smoking_history_brief,levels = c("Never","Former/current"))
+### 绘制百分比柱状图
+ggplot(df_percent, aes(x = Smoking_history_brief, y = percent, fill = STV)) +
+  geom_col(position = "dodge", width = 0.7) +  # 使用dodge参数让柱子并排显示
+  geom_text(
+    aes(label = sprintf("%.1f%%", percent)),  # 显示百分比标签
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 5
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  scale_x_discrete(
+    labels = c(paste0("Never\n(N=",length(unique(df$SAMPLE[df$Smoking_history_brief=="Never"])),")"),
+               paste0("Former/current\n(N=",length(unique(df$SAMPLE[df$Smoking_history_brief=="Former/current"])),")"))
+  ) +
+  labs(
+    x = "",
+    y = "Percent(%)",
+    fill = "",
+    title = ""
+  ) +
+  ylim(0, max(df_percent$percent) + 10) +  # 调整y轴范围，避免标签被截断
+  theme_bw() +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14,face = "bold"), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_7smoking_status百分比柱状图.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+
+#7 分化和sv数量，类型的关系
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  filter(!Subtype_short %in% c("0","Unreported")) %>%
+  mutate(Differentiation=ifelse(Subtype_short=="Micropapillary/Solid","Poor",
+                         ifelse(Subtype_short=="Lepidic","Well","Mod"))) %>%
+  filter(SAMPLE!="7035LC")
+df$Differentiation <- factor(df$Differentiation,levels=c("Well","Mod","Poor"))
+p <- ggplot(df,aes(x=Differentiation,y=total_count,fill=Differentiation))+ #”fill=“设置填充颜色
+  stat_boxplot(geom = "errorbar",width=0.15,aes(color="black"))+ #由于自带的箱形图没有胡须末端没有短横线，使用误差条的方式补上
+  geom_boxplot(size=0.5,fill="white",outlier.fill="white",outlier.color="white")+ #size设置箱线图的边框线和胡须的线宽度，fill设置填充颜色，outlier.fill和outlier.color设置异常点的属性
+  geom_jitter(aes(fill=Differentiation),width =0.2,shape = 21,size=2.5)+ #设置为向水平方向抖动的散点图，width指定了向水平方向抖动，不改变纵轴的值
+  scale_fill_manual(values = c("#4D779B", "#FFC04D","#CD3842"))+  #设置填充的颜色
+  scale_color_manual(values=c("black","black","black"))+ #设置散点图的圆圈的颜色为黑色
+  ggtitle("")+ #设置总的标题
+  scale_x_discrete(
+    labels = c(paste0("Well\n(N=",length(unique(df$SAMPLE[df$Differentiation=="Well"])),")"),
+               paste0("Mod\n(N=",length(unique(df$SAMPLE[df$Differentiation=="Mod"])),")"),
+               paste0("Poor\n(N=",length(unique(df$SAMPLE[df$Differentiation=="Poor"])),")"))
+  ) +
+  theme_bw()+ #背景变为白色
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))+ #设置总标题的字体属性
+  ylab("Number of junctions")+xlab("") #设置x轴和y轴的标题
+my_comparisons <- list(c("Well","Mod"),c("Mod","Poor"),c("Well","Poor"))
+p+stat_compare_means(comparisons = my_comparisons,
+                     label.y = c(max(df$total_count)+0.5,max(df$total_count)+30.5,max(df$total_count)+60.5))+ #默认就是wilconx秩和检验
+  theme()
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_8_svcount_differentionstatus.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+###百分比柱状图
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(Differentiation=ifelse(Subtype_short=="Micropapillary/Solid","Poor",
+                                ifelse(Subtype_short=="Lepidic","Well","Mod")))
+### 将数据从宽格式转换为长格式，方便绘图
+df_long <- df %>%
+  pivot_longer(
+    cols = c(Deletion, `Interchromosomal Translocation`, `Tandem Duplication`, Inversion),
+    names_to = "STV",  # 新列，存储结构变异类型
+    values_to = "count"  # 新列，存储对应类型的数目
+  )
+
+### 计算每个分期下各STV的百分比
+df_percent <- df_long %>%
+  group_by(Differentiation, STV) %>%
+  summarise(total = sum(count), .groups = "drop") %>%  # 计算每个分期下各STV的总数
+  group_by(Differentiation) %>%
+  mutate(percent = total / sum(total) * 100)  # 计算百分比
+df_percent$Differentiation <- factor(df_percent$Differentiation,levels = c("Well","Mod","Poor"))
+### 绘制百分比柱状图
+ggplot(df_percent, aes(x = Differentiation, y = percent, fill = STV)) +
+  geom_col(position = "dodge", width = 0.7) +  # 使用dodge参数让柱子并排显示
+  geom_text(
+    aes(label = sprintf("%.1f%%", percent)),  # 显示百分比标签
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 5
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  scale_x_discrete(
+    labels = c(paste0("Well\n(N=",length(unique(df$SAMPLE[df$Differentiation=="Well"])),")"),
+               paste0("Mod\n(N=",length(unique(df$SAMPLE[df$Differentiation=="Mod"])),")"),
+               paste0("Poor\n(N=",length(unique(df$SAMPLE[df$Differentiation=="Poor"])),")"))
+  ) +
+  labs(
+    x = "",
+    y = "Percent(%)",
+    fill = "",
+    title = ""
+  ) +
+  ylim(0, max(df_percent$percent) + 10) +  # 调整y轴范围，避免标签被截断
+  theme_bw() +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14,face = "bold"), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_9_differentiationstatus百分比柱状图.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+#8 CT和sv数量，类型的关系
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  filter(SAMPLE!="7035LC")
+df$CT_presentation <- factor(df$CT_presentation,levels=c("Pure_GGO","Subsolid","Solid"))
+p <- ggplot(df,aes(x=CT_presentation,y=total_count,fill=CT_presentation))+ #”fill=“设置填充颜色
+  stat_boxplot(geom = "errorbar",width=0.15,aes(color="black"))+ #由于自带的箱形图没有胡须末端没有短横线，使用误差条的方式补上
+  geom_boxplot(size=0.5,fill="white",outlier.fill="white",outlier.color="white")+ #size设置箱线图的边框线和胡须的线宽度，fill设置填充颜色，outlier.fill和outlier.color设置异常点的属性
+  geom_jitter(aes(fill=CT_presentation),width =0.2,shape = 21,size=2.5)+ #设置为向水平方向抖动的散点图，width指定了向水平方向抖动，不改变纵轴的值
+  scale_fill_manual(values = c("#4D779B", "#FFC04D","#CD3842"))+  #设置填充的颜色
+  scale_color_manual(values=c("black","black","black"))+ #设置散点图的圆圈的颜色为黑色
+  ggtitle("")+ #设置总的标题
+  scale_x_discrete(
+    labels = c(paste0("Pure_GGO\n(N=",length(unique(df$SAMPLE[df$CT_presentation=="Pure_GGO"])),")"),
+               paste0("Subsolid\n(N=",length(unique(df$SAMPLE[df$CT_presentation=="Subsolid"])),")"),
+               paste0("Solid\n(N=",length(unique(df$SAMPLE[df$CT_presentation=="Solid"])),")"))
+  ) +
+  theme_bw()+ #背景变为白色
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))+ #设置总标题的字体属性
+  ylab("Number of junctions")+xlab("") #设置x轴和y轴的标题
+my_comparisons <- list(c("Pure_GGO","Subsolid"),c("Subsolid","Solid"),c("Pure_GGO","Solid"))
+p+stat_compare_means(comparisons = my_comparisons,
+                     label.y = c(max(df$total_count)+0.5,max(df$total_count)+30.5,max(df$total_count)+60.5))+ #默认就是wilconx秩和检验
+  theme()
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_10_svcount_CTstatus.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+###百分比柱状图
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID"))
+### 将数据从宽格式转换为长格式，方便绘图
+df_long <- df %>%
+  pivot_longer(
+    cols = c(Deletion, `Interchromosomal Translocation`, `Tandem Duplication`, Inversion),
+    names_to = "STV",  # 新列，存储结构变异类型
+    values_to = "count"  # 新列，存储对应类型的数目
+  )
+
+### 计算每个分期下各STV的百分比
+df_percent <- df_long %>%
+  group_by(CT_presentation, STV) %>%
+  summarise(total = sum(count), .groups = "drop") %>%  # 计算每个分期下各STV的总数
+  group_by(CT_presentation) %>%
+  mutate(percent = total / sum(total) * 100)  # 计算百分比
+df_percent$CT_presentation <- factor(df_percent$CT_presentation,levels = c("Pure_GGO","Subsolid","Solid"))
+### 绘制百分比柱状图
+ggplot(df_percent, aes(x = CT_presentation, y = percent, fill = STV)) +
+  geom_col(position = "dodge", width = 0.7) +  # 使用dodge参数让柱子并排显示
+  geom_text(
+    aes(label = sprintf("%.1f%%", percent)),  # 显示百分比标签
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 5
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  scale_x_discrete(
+    labels = c(paste0("Pure_GGO\n(N=",length(unique(df$SAMPLE[df$CT_presentation=="Pure_GGO"])),")"),
+               paste0("Subsolid\n(N=",length(unique(df$SAMPLE[df$CT_presentation=="Subsolid"])),")"),
+               paste0("Solid\n(N=",length(unique(df$SAMPLE[df$CT_presentation=="Solid"])),")"))
+  ) +
+  labs(
+    x = "",
+    y = "Percent(%)",
+    fill = "",
+    title = ""
+  ) +
+  ylim(0, max(df_percent$percent) + 10) +  # 调整y轴范围，避免标签被截断
+  theme_bw() +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14,face = "bold"), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_11CT_status百分比柱状图.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+#9 sv数量高低的KM曲线(以中位数或平均数为界)
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(group=ifelse(total_count>=54.47,"STV Number High","STV Number Low"))
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_12svcount_kmos.pdf"
+pdf(file = filename,width = 8,height = 6,onefile = F)
+km_os<-survfit(Surv(OS,OS_E)~group,data = df)
+ggsurvplot(km_os,
+           conf.int=F, #是否显示生存率的95%CI
+           risk.table=T,#显示风险表
+           palette=c("#CD3842","#4D779B"), #柳叶刀配色
+           #title=paste0(gene,"_OS"), #大标题
+           risk.table.height = 0.25,#风险表的高度比例
+           pval=T,
+           pval.method=T
+)
+dev.off()
+#rfs
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_13svcount_kmrfs.pdf"
+pdf(file = filename,width = 8,height = 6,onefile = F)
+km_rfs<-survfit(Surv(RFS,RFS_E)~group,data = df)
+ggsurvplot(km_rfs,
+           conf.int=F, #是否显示生存率的95%CI
+           risk.table=TRUE,#显示风险表
+           palette=c("#CD3842","#4D779B"), #柳叶刀配色
+           #title=paste0(gene,"_RFS"), #大标题
+           risk.table.height = 0.25, #风险表的高度比例
+           pval=T,
+           pval.method=T)
+dev.off()
+
+#10 sv 数量和EGFR,KRAS,TP53突变的关系
+mut <- coding_maf %>%
+  filter(Hugo_Symbol %in% c("KRAS","TP53","EGFR"),ONCOGENIC %in% c("Oncogenic","Likely Oncogenic")) %>%
+  mutate(status="Mut") %>%
+  select(Tumor_Sample_Barcode,Hugo_Symbol,status) %>%
+  distinct() %>%
+  pivot_wider(
+    id_cols = Tumor_Sample_Barcode,          # 按sample分组
+    names_from = Hugo_Symbol,         # 列名来自gene
+    values_from = status,      # 填充值来自status
+    values_fill = "Wt"         # 缺失值填充为"Wt"
+  )
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(Tumor_Sample_Barcode=SAMPLE) %>%
+  left_join(mut,by=c("Tumor_Sample_Barcode")) %>%
+  filter(SAMPLE!="7035LC")
+df <- df %>%
+  mutate(across(everything(), ~replace(., is.na(.), "Wt")))
+df$total_count <- as.numeric(df$total_count)
+###EGFR
+df$EGFR <- factor(df$EGFR,levels=c("Wt","Mut"))
+p <- ggplot(df,aes(x=EGFR,y=total_count,fill=EGFR))+ #”fill=“设置填充颜色
+  stat_boxplot(geom = "errorbar",width=0.15,aes(color="black"))+ #由于自带的箱形图没有胡须末端没有短横线，使用误差条的方式补上
+  geom_boxplot(size=0.5,fill="white",outlier.fill="white",outlier.color="white")+ #size设置箱线图的边框线和胡须的线宽度，fill设置填充颜色，outlier.fill和outlier.color设置异常点的属性
+  geom_jitter(aes(fill=EGFR),width =0.2,shape = 21,size=2.5)+ #设置为向水平方向抖动的散点图，width指定了向水平方向抖动，不改变纵轴的值
+  scale_fill_manual(values = c("#4D779B", "#FFC04D","#CD3842"))+  #设置填充的颜色
+  scale_color_manual(values=c("black","black","black"))+ #设置散点图的圆圈的颜色为黑色
+  ggtitle("")+ #设置总的标题
+  scale_x_discrete(
+    labels = c(paste0("EGFR Wt\n(N=",length(unique(df$SAMPLE[df$EGFR=="Wt"])),")"),
+               paste0("EGFR Mut\n(N=",length(unique(df$SAMPLE[df$EGFR=="Mut"])),")"))
+  ) +
+  theme_bw()+ #背景变为白色
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))+ #设置总标题的字体属性
+  ylab("Number of junctions")+xlab("") #设置x轴和y轴的标题
+my_comparisons <- list(c("Wt","Mut"))
+p+stat_compare_means(comparisons = my_comparisons,
+                     label.y = c(max(df$total_count)+0.5,max(df$total_count)+30.5))+ #默认就是wilconx秩和检验
+  theme()
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_13_svcount_EGFRstatus.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+###百分比柱状图
+mut <- coding_maf %>%
+  filter(Hugo_Symbol %in% c("KRAS","TP53","EGFR"),ONCOGENIC %in% c("Oncogenic","Likely Oncogenic")) %>%
+  mutate(status="Mut") %>%
+  select(Tumor_Sample_Barcode,Hugo_Symbol,status) %>%
+  distinct() %>%
+  pivot_wider(
+    id_cols = Tumor_Sample_Barcode,          # 按sample分组
+    names_from = Hugo_Symbol,         # 列名来自gene
+    values_from = status,      # 填充值来自status
+    values_fill = "Wt"         # 缺失值填充为"Wt"
+  )
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(Tumor_Sample_Barcode=SAMPLE) %>%
+  left_join(mut,by=c("Tumor_Sample_Barcode"))
+df <- df %>%
+  mutate(across(everything(), ~replace(., is.na(.), "Wt")))
+df$total_count <- as.numeric(df$total_count)
+### 将数据从宽格式转换为长格式，方便绘图
+df_long <- df %>%
+  pivot_longer(
+    cols = c(Deletion, `Interchromosomal Translocation`, `Tandem Duplication`, Inversion),
+    names_to = "STV",  # 新列，存储结构变异类型
+    values_to = "count"  # 新列，存储对应类型的数目
+  )
+df_long$count <- as.numeric(df_long$count)
+### 计算每个分期下各STV的百分比
+df_percent <- df_long %>%
+  group_by(EGFR, STV) %>%
+  summarise(total = sum(count), .groups = "drop") %>%  # 计算每个分期下各STV的总数
+  group_by(EGFR) %>%
+  mutate(percent = total / sum(total) * 100)  # 计算百分比
+df_percent$EGFR <- factor(df_percent$EGFR,levels = c("Wt","Mut"))
+### 绘制百分比柱状图
+ggplot(df_percent, aes(x = EGFR, y = percent, fill = STV)) +
+  geom_col(position = "dodge", width = 0.7) +  # 使用dodge参数让柱子并排显示
+  geom_text(
+    aes(label = sprintf("%.1f%%", percent)),  # 显示百分比标签
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 5
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  scale_x_discrete(
+    labels = c(paste0("EGFR Wt\n(N=",length(unique(df$SAMPLE[df$EGFR=="Wt"])),")"),
+               paste0("EGFR Mut\n(N=",length(unique(df$SAMPLE[df$EGFR=="Mut"])),")"))
+  ) +
+  labs(
+    x = "",
+    y = "Percent(%)",
+    fill = "",
+    title = ""
+  ) +
+  ylim(0, max(df_percent$percent) + 10) +  # 调整y轴范围，避免标签被截断
+  theme_bw() +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14,face = "bold"), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_14EGFR_status百分比柱状图.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+###KRAS
+mut <- coding_maf %>%
+  filter(Hugo_Symbol %in% c("KRAS","TP53","EGFR"),ONCOGENIC %in% c("Oncogenic","Likely Oncogenic")) %>%
+  mutate(status="Mut") %>%
+  select(Tumor_Sample_Barcode,Hugo_Symbol,status) %>%
+  distinct() %>%
+  pivot_wider(
+    id_cols = Tumor_Sample_Barcode,          # 按sample分组
+    names_from = Hugo_Symbol,         # 列名来自gene
+    values_from = status,      # 填充值来自status
+    values_fill = "Wt"         # 缺失值填充为"Wt"
+  )
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(Tumor_Sample_Barcode=SAMPLE) %>%
+  left_join(mut,by=c("Tumor_Sample_Barcode")) %>%
+  filter(SAMPLE!="7035LC")
+df <- df %>%
+  mutate(across(everything(), ~replace(., is.na(.), "Wt")))
+df$total_count <- as.numeric(df$total_count)
+df$KRAS <- factor(df$KRAS,levels=c("Wt","Mut"))
+p <- ggplot(df,aes(x=KRAS,y=total_count,fill=KRAS))+ #”fill=“设置填充颜色
+  stat_boxplot(geom = "errorbar",width=0.15,aes(color="black"))+ #由于自带的箱形图没有胡须末端没有短横线，使用误差条的方式补上
+  geom_boxplot(size=0.5,fill="white",outlier.fill="white",outlier.color="white")+ #size设置箱线图的边框线和胡须的线宽度，fill设置填充颜色，outlier.fill和outlier.color设置异常点的属性
+  geom_jitter(aes(fill=KRAS),width =0.2,shape = 21,size=2.5)+ #设置为向水平方向抖动的散点图，width指定了向水平方向抖动，不改变纵轴的值
+  scale_fill_manual(values = c("#4D779B", "#FFC04D","#CD3842"))+  #设置填充的颜色
+  scale_color_manual(values=c("black","black","black"))+ #设置散点图的圆圈的颜色为黑色
+  ggtitle("")+ #设置总的标题
+  scale_x_discrete(
+    labels = c(paste0("KRAS Wt\n(N=",length(unique(df$SAMPLE[df$KRAS=="Wt"])),")"),
+               paste0("KRAS Mut\n(N=",length(unique(df$SAMPLE[df$KRAS=="Mut"])),")"))
+  ) +
+  theme_bw()+ #背景变为白色
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))+ #设置总标题的字体属性
+  ylab("Number of junctions")+xlab("") #设置x轴和y轴的标题
+my_comparisons <- list(c("Wt","Mut"))
+p+stat_compare_means(comparisons = my_comparisons,
+                     label.y = c(max(df$total_count)+0.5,max(df$total_count)+30.5))+ #默认就是wilconx秩和检验
+  theme()
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_15_svcount_KRASstatus.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+###百分比柱状图
+mut <- coding_maf %>%
+  filter(Hugo_Symbol %in% c("KRAS","TP53","EGFR"),ONCOGENIC %in% c("Oncogenic","Likely Oncogenic")) %>%
+  mutate(status="Mut") %>%
+  select(Tumor_Sample_Barcode,Hugo_Symbol,status) %>%
+  distinct() %>%
+  pivot_wider(
+    id_cols = Tumor_Sample_Barcode,          # 按sample分组
+    names_from = Hugo_Symbol,         # 列名来自gene
+    values_from = status,      # 填充值来自status
+    values_fill = "Wt"         # 缺失值填充为"Wt"
+  )
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(Tumor_Sample_Barcode=SAMPLE) %>%
+  left_join(mut,by=c("Tumor_Sample_Barcode"))
+df <- df %>%
+  mutate(across(everything(), ~replace(., is.na(.), "Wt")))
+df$total_count <- as.numeric(df$total_count)
+### 将数据从宽格式转换为长格式，方便绘图
+df_long <- df %>%
+  pivot_longer(
+    cols = c(Deletion, `Interchromosomal Translocation`, `Tandem Duplication`, Inversion),
+    names_to = "STV",  # 新列，存储结构变异类型
+    values_to = "count"  # 新列，存储对应类型的数目
+  )
+df_long$count <- as.numeric(df_long$count)
+### 计算每个分期下各STV的百分比
+df_percent <- df_long %>%
+  group_by(KRAS, STV) %>%
+  summarise(total = sum(count), .groups = "drop") %>%  # 计算每个分期下各STV的总数
+  group_by(KRAS) %>%
+  mutate(percent = total / sum(total) * 100)  # 计算百分比
+df_percent$KRAS <- factor(df_percent$KRAS,levels = c("Wt","Mut"))
+### 绘制百分比柱状图
+ggplot(df_percent, aes(x = KRAS, y = percent, fill = STV)) +
+  geom_col(position = "dodge", width = 0.7) +  # 使用dodge参数让柱子并排显示
+  geom_text(
+    aes(label = sprintf("%.1f%%", percent)),  # 显示百分比标签
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 5
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  scale_x_discrete(
+    labels = c(paste0("KRAS Wt\n(N=",length(unique(df$SAMPLE[df$KRAS=="Wt"])),")"),
+               paste0("KRAS Mut\n(N=",length(unique(df$SAMPLE[df$KRAS=="Mut"])),")"))
+  ) +
+  labs(
+    x = "",
+    y = "Percent(%)",
+    fill = "",
+    title = ""
+  ) +
+  ylim(0, max(df_percent$percent) + 10) +  # 调整y轴范围，避免标签被截断
+  theme_bw() +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14,face = "bold"), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_16KRAS_status百分比柱状图.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+###TP53
+mut <- coding_maf %>%
+  filter(Hugo_Symbol %in% c("KRAS","TP53","EGFR"),ONCOGENIC %in% c("Oncogenic","Likely Oncogenic")) %>%
+  mutate(status="Mut") %>%
+  select(Tumor_Sample_Barcode,Hugo_Symbol,status) %>%
+  distinct() %>%
+  pivot_wider(
+    id_cols = Tumor_Sample_Barcode,          # 按sample分组
+    names_from = Hugo_Symbol,         # 列名来自gene
+    values_from = status,      # 填充值来自status
+    values_fill = "Wt"         # 缺失值填充为"Wt"
+  )
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(Tumor_Sample_Barcode=SAMPLE) %>%
+  left_join(mut,by=c("Tumor_Sample_Barcode")) %>%
+  filter(SAMPLE!="7035LC")
+df <- df %>%
+  mutate(across(everything(), ~replace(., is.na(.), "Wt")))
+df$total_count <- as.numeric(df$total_count)
+df$TP53 <- factor(df$TP53,levels=c("Wt","Mut"))
+p <- ggplot(df,aes(x=TP53,y=total_count,fill=TP53))+ #”fill=“设置填充颜色
+  stat_boxplot(geom = "errorbar",width=0.15,aes(color="black"))+ #由于自带的箱形图没有胡须末端没有短横线，使用误差条的方式补上
+  geom_boxplot(size=0.5,fill="white",outlier.fill="white",outlier.color="white")+ #size设置箱线图的边框线和胡须的线宽度，fill设置填充颜色，outlier.fill和outlier.color设置异常点的属性
+  geom_jitter(aes(fill=TP53),width =0.2,shape = 21,size=2.5)+ #设置为向水平方向抖动的散点图，width指定了向水平方向抖动，不改变纵轴的值
+  scale_fill_manual(values = c("#4D779B", "#FFC04D","#CD3842"))+  #设置填充的颜色
+  scale_color_manual(values=c("black","black","black"))+ #设置散点图的圆圈的颜色为黑色
+  ggtitle("")+ #设置总的标题
+  scale_x_discrete(
+    labels = c(paste0("TP53 Wt\n(N=",length(unique(df$SAMPLE[df$TP53=="Wt"])),")"),
+               paste0("TP53 Mut\n(N=",length(unique(df$SAMPLE[df$TP53=="Mut"])),")"))
+  ) +
+  theme_bw()+ #背景变为白色
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))+ #设置总标题的字体属性
+  ylab("Number of junctions")+xlab("") #设置x轴和y轴的标题
+my_comparisons <- list(c("Wt","Mut"))
+p+stat_compare_means(comparisons = my_comparisons,
+                     label.y = c(max(df$total_count)+0.5,max(df$total_count)+30.5))+ #默认就是wilconx秩和检验
+  theme()
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_17_svcount_TP53status.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+
+###百分比柱状图
+mut <- coding_maf %>%
+  filter(Hugo_Symbol %in% c("TP53","KRAS","EGFR"),ONCOGENIC %in% c("Oncogenic","Likely Oncogenic")) %>%
+  mutate(status="Mut") %>%
+  select(Tumor_Sample_Barcode,Hugo_Symbol,status) %>%
+  distinct() %>%
+  pivot_wider(
+    id_cols = Tumor_Sample_Barcode,          # 按sample分组
+    names_from = Hugo_Symbol,         # 列名来自gene
+    values_from = status,      # 填充值来自status
+    values_fill = "Wt"         # 缺失值填充为"Wt"
+  )
+df <- df_simple_sv_count %>%
+  mutate(Sample_ID=SAMPLE) %>%
+  left_join(df_clin,by = c("Sample_ID")) %>%
+  mutate(Tumor_Sample_Barcode=SAMPLE) %>%
+  left_join(mut,by=c("Tumor_Sample_Barcode"))
+df <- df %>%
+  mutate(across(everything(), ~replace(., is.na(.), "Wt")))
+df$total_count <- as.numeric(df$total_count)
+### 将数据从宽格式转换为长格式，方便绘图
+df_long <- df %>%
+  pivot_longer(
+    cols = c(Deletion, `Interchromosomal Translocation`, `Tandem Duplication`, Inversion),
+    names_to = "STV",  # 新列，存储结构变异类型
+    values_to = "count"  # 新列，存储对应类型的数目
+  )
+df_long$count <- as.numeric(df_long$count)
+### 计算每个分期下各STV的百分比
+df_percent <- df_long %>%
+  group_by(TP53, STV) %>%
+  summarise(total = sum(count), .groups = "drop") %>%  # 计算每个分期下各STV的总数
+  group_by(TP53) %>%
+  mutate(percent = total / sum(total) * 100)  # 计算百分比
+df_percent$TP53 <- factor(df_percent$TP53,levels = c("Wt","Mut"))
+### 绘制百分比柱状图
+ggplot(df_percent, aes(x = TP53, y = percent, fill = STV)) +
+  geom_col(position = "dodge", width = 0.7) +  # 使用dodge参数让柱子并排显示
+  geom_text(
+    aes(label = sprintf("%.1f%%", percent)),  # 显示百分比标签
+    position = position_dodge(width = 0.7),
+    vjust = -0.3, size = 5
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Tandem Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Insertion" = rgb(184, 219, 179, maxColorValue = 255),
+    "Interchromosomal Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  scale_x_discrete(
+    labels = c(paste0("TP53 Wt\n(N=",length(unique(df$SAMPLE[df$TP53=="Wt"])),")"),
+               paste0("TP53 Mut\n(N=",length(unique(df$SAMPLE[df$TP53=="Mut"])),")"))
+  ) +
+  labs(
+    x = "",
+    y = "Percent(%)",
+    fill = "",
+    title = ""
+  ) +
+  ylim(0, max(df_percent$percent) + 10) +  # 调整y轴范围，避免标签被截断
+  theme_bw() +
+  theme(legend.position="none", #不需要图例
+        axis.text.x=element_text(colour="black",size=14,face = "bold"), #设置x轴刻度标签的字体属性
+        axis.text.y=element_text(size=14,face="bold"), #设置x轴刻度标签的字体属性
+        axis.title.y=element_text(size = 14,face="bold"), #设置y轴的标题的字体属性
+        axis.title.x=element_text(size = 14,face="bold"), #设置x轴的标题的字体属性
+        plot.title = element_text(size=15,face="bold",hjust = 0.5))#设置总标题的字体属性
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-1_18TP53_status百分比柱状图.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
