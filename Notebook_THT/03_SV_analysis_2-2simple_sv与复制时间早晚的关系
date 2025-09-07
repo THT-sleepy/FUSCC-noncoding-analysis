@@ -5,21 +5,20 @@
 * 看下哪些特征是和simple sv相关的 (Why)
 
 
-## 代码                                          (How)
+## 此脚本首先根据gencode来源的文件(see methods)构建复制时间早晚的信息, 然后再分析simple sv与复制时间早晚的关系                                         (How)
 
+
+### 这一步是解决后面normalize.quantiles.use.target()函数的报错
 ```
-##此脚本首先根据gencode来源的文件(see methods)构建复制时间早晚的信息
-##然后再分析simple sv与复制时间早晚的关系
-
-##这一步是解决后面normalize.quantiles.use.target()函数的报错
 #设置禁用线程的配置参数：
 configure.args <- c(preprocessCore = "--disable-threading")
 options(configure.args = configure.args)
 #重新安装 preprocessCore 包：
 renv::install("bioc::preprocessCore", rebuild = TRUE, force = TRUE, update = TRUE, type = "source")
+```
 
-
-#step1 得到复制早晚时间的信息
+## step1 得到复制早晚时间的信息
+```
 library(preprocessCore)
 setwd("~/1000_noncoding/3.SV_analysis/1.resources/")
 merge<-read.table("merge_RT.txt", header=FALSE)
@@ -57,25 +56,31 @@ for(i in 1:(ncol(merge_norm)-3)){
 for(i in 1:length(AllLoess)){write.table(AllLoess[[i]][complete.cases(AllLoess[[i]]),],
                                          gsub(".bg","Loess.bedGraph",colnames(AllLoess[[i]]))[4], sep="\t", row.names=FALSE, quote=FALSE,
                                          col.names=FALSE)}
+```
 
-#step2 得到simple sv与复制时间的关系
+## step2 得到simple sv与复制时间的关系
 
-##loading packages
+### loading packages
+```
 library(dplyr)
 library(tidyr)
 library(GenomicRanges)
 library(ggplot2)
+```
 
-##loading files
+### loading files
+
+```
 ###vcf
 load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_vcf_afterQC.Rdata")
 
 ###得到复制时间文件
 df_A549_repli_bg <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/A549_T_Loess.bedGraph",header = F)
 colnames(df_A549_repli_bg) <- c("chr","start","end","value")
+```
 
-
-##整理数据
+### 整理数据
+```
 ###按照Fujimoto的做法，把bins(50kb)按从早到晚分为5组(每一组包含的bin的数目一样)
 num_groups <- 5  # 目标分组数（固定为5组）
 total_rows <- nrow(df_A549_repli_bg)  # 数据总行数（此处为22行）
@@ -190,6 +195,11 @@ df_plot$group_name <- factor(df_plot$group_name,levels = c("[3.30, 12.80]",
                                                            "[-2.06, 0.54]",
                                                            "[-3.32, -2.06]",
                                                            "[-7.01, -3.32]"))
+
+  ```
+
+### 绘图
+```
 ggplot(df_plot,aes(x=group_name,y=proportion,fill = SV_TYPE)) +
   geom_bar(stat="identity",position = "dodge")+
   theme_bw()+
@@ -216,3 +226,8 @@ filename <- "~/1000_noncoding/3.SV_analysis/pictures/sv_type_vs_replicationtime.
 ggsave(filename = filename,device = "pdf",width = 8,height = 6)
 
 ```
+<img src=".\figures\sv_type_vs_replicationtime.png">
+
+                          (Result)
+* 和Fujimoto以及Li yilong的文章一致的是Tandem DUP主要富集在复制时间早的区域，DEL主要富集在复制时间晚的区域
+* 不太一致的是TRA从复制时间早到晚是一个先下降再上升的趋势(两头富集)，而不是像之前的研究那样只富集在复制时间早的区域
