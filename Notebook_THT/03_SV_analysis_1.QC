@@ -80,7 +80,7 @@ save(all_vcf_data,file="~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_vc
 # to do list
 ## 0 要修正一下sv的计数(reciprocal算两个？)-done
 ## 1 比较一下不同分期总sv数量的差别以及各类型sv的差别(箱线图+百分比柱状图)-done
-## 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)
+## 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)-done
 ## 3 sv类型和复制时间早晚的关系-done
 ## 4 sv数量和临床指标的关系，和驱动突变以及TP53等突变的关系-done
 ## 5 sv数量类型和染色质可及性的关系-done

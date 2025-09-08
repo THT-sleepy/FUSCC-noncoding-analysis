@@ -3,14 +3,14 @@
 ### 2 SSM部分需要重新定义元件，还要加跑几个包
 
 # 下游分析部分
-### 1 比较一下不同分期总sv数量的差别以及各类型sv的差别
-### 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)-yang lixing 课程
-### 3 sv类型和复制时间早晚的关系-fujimoto
-### 4 sv数量和临床指标的关系，和驱动突变以及TP53等突变的关系
+### 1 比较一下不同分期总sv数量的差别以及各类型sv的差别-done
+### 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)-yang lixing 课程-done
+### 3 sv类型和复制时间早晚的关系-fujimoto-done
+### 4 sv数量和临床指标的关系，和驱动突变以及TP53等突变的关系-done
 ### 5 Rheinbay部分需要对sv进行更详细的细分(Fusion-like,fragile-like,SCNA-like)
 ### 6 sv signature分析
 ### 7 特殊sv事件如EH，结构破坏(PD-L1 3'UTR),ecDNA的形成(可行性待查)
-### 8 表达受SV显著影响基因集的GSEA分析
+### 8 表达受SV显著影响基因集的GSEA分析-done
 ### 9 SRJ分析结果整理一下
 ### 10 可探索的分析 扩增子与SE的重合区域
 ### 11 kataegis
