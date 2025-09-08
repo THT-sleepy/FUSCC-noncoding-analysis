@@ -83,5 +83,5 @@ save(all_vcf_data,file="~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_vc
 ## 2 sv 和 cnv的一致性(cnv要用GISTC2对应的那个结果)
 ## 3 sv类型和复制时间早晚的关系-done
 ## 4 sv数量和临床指标的关系，和驱动突变以及TP53等突变的关系-done
-## 5 sv数量类型和染色质可及性的关系
+## 5 sv数量类型和染色质可及性的关系-done
 ## 6 搞一个多重回归，看下sv数量到底受什么影响比较大

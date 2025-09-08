@@ -1,0 +1,338 @@
+# simple sv与染色质可及性的关系             (What)
+
+* Sep 8, 2025                                 (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis           (Where)
+* 看一下sv数量和类型与DNA染色质可及性的关系         (Why)
+
+
+## 第一个分析首先以50kb为bin的单位，统计了复制时间，以及用atacseq_peak_n反映的染色质可及性，还有就是区间内各结构变异类型断点的数目，然后以复制时间和染色质可及性为自变量，各类型结构变异数目作为因变量做了单因素和多因素线性回归；第二个分析以500kb为单位，将染色质可及性分为低，中，高三组，分析了三组中sv类型占比(各类型sv占该类型sv总数的比例)的变化    (How)
+
+
+## loading packages
+```
+library(GenomicRanges)
+library(dplyr)
+library(rtracklayer)
+```
+
+##loading files
+```
+#复制时间的信息
+df_A549_repli_bg <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/A549_T_Loess.bedGraph",header = F)
+colnames(df_A549_repli_bg) <- c("chr","start","end","replication_value")
+#染色质可及性
+df_A549_chromatin_accessibility_bed <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/A549_atacseq.bed.gz",header=F)
+#sv的信息
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/2-2_df_brks.RData")
+df_brks <- df_brks %>%
+  filter(SV_TYPE!="Insertion")
+```
+
+## sv数目与复制时间及染色质可及性的关系-线性回归
+```
+#目标数据框是bin区间，复制时间的值，染色质可及性的peak数目，各类型sv的junction数目
+#1 把复制时间和染色质可及性整理到一起
+df <- df_A549_repli_bg
+peaks_bed <- unique(df_A549_chromatin_accessibility_bed[,c(1,2,3)])
+colnames(peaks_bed) <- c("chr","start","end")
+gr_df <- GRanges(seqnames = df$chr,ranges = IRanges(start = df$start+1,end = df$end))
+gr_peaks_bed <- GRanges(seqnames = peaks_bed$chr,ranges = IRanges(start = peaks_bed$start+1,end=peaks_bed$end))
+overlaps <- findOverlaps(gr_df,gr_peaks_bed)
+counts <- tabulate(queryHits(overlaps), nbins = length(gr_df))
+df$atac_peak_n <- counts
+#2 把sv信息整合进来
+gr_brks <- GRanges(seqnames = df_brks$CHROM,ranges = IRanges(start = df_brks$POS,width = 1))
+overlaps <- findOverlaps(gr_df, gr_brks)
+
+# 提取匹配的区间信息
+result_df <- data.frame(
+  query_id = queryHits(overlaps),  # 第一个文件中的区间ID
+  sv_type = df_brks$SV_TYPE[subjectHits(overlaps)]  # 对应的结构变异类型
+)
+
+# 统计每个区间的各类型数量
+counts <- result_df %>%
+  group_by(query_id, sv_type) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    id_cols = query_id,
+    names_from = sv_type,
+    values_from = count,
+    values_fill = 0
+  )
+
+# 计算每个区间的总数量
+counts <- counts %>%
+  mutate(total = rowSums(select(., -query_id)))
+
+# 将结果与原始区间信息合并
+df[counts$query_id,c(6:12)] <- counts
+df[is.na(df)] <- 0
+df$query_id <- NULL
+
+df_sv_atacseq_repliseq <- df
+
+colnames(df_sv_atacseq_repliseq)[c(6,8)] <- c("Interchromosomal_Translocation","Tandem_Duplication")
+
+
+##线性回归分析
+# 定义因变量名称向量
+dependent_vars <- c(
+  "Interchromosomal_Translocation",
+  "Inversion",
+  "Tandem_Duplication",
+  "Deletion",
+  "total"
+)
+
+# 定义自变量
+independent_vars <- c("replication_value", "atac_peak_n")
+
+# 初始化结果数据框
+results_df <- data.frame(
+  因变量 = character(),
+  自变量 = character(),
+  模型类型 = character(),
+  系数 = numeric(),
+  标准误 = numeric(),
+  t值 = numeric(),
+  p值 = numeric(),
+  调整后R方 = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# 循环处理每个因变量
+for (dep_var in dependent_vars) {
+
+  # 1. 单因素回归分析
+  for (ind_var in independent_vars) {
+    # 构建公式
+    formula_str <- paste(dep_var, "~", ind_var)
+    model <- lm(as.formula(formula_str), data = df_sv_atacseq_repliseq)
+    summary_model <- summary(model)
+
+    # 提取结果
+    coefs <- coef(summary_model)
+    result_row <- data.frame(
+      因变量 = dep_var,
+      自变量 = ind_var,
+      模型类型 = "单因素",
+      系数 = coefs[2, 1],
+      标准误 = coefs[2, 2],
+      t值 = coefs[2, 3],
+      p值 = coefs[2, 4],
+      调整后R方 = summary_model$adj.r.squared,
+      stringsAsFactors = FALSE
+    )
+
+    # 添加到结果数据框
+    results_df <- rbind(results_df, result_row)
+  }
+
+  # 2. 多因素回归分析（包含两个自变量）
+  formula_str <- paste(dep_var, "~ replication_value + atac_peak_n")
+  model <- lm(as.formula(formula_str), data = df_sv_atacseq_repliseq)
+  summary_model <- summary(model)
+
+  # 提取两个自变量的结果
+  for (i in 2:nrow(coef(summary_model))) {  # 从2开始跳过截距项
+    ind_var <- rownames(coef(summary_model))[i]
+    result_row <- data.frame(
+      因变量 = dep_var,
+      自变量 = ind_var,
+      模型类型 = "多因素",
+      系数 = coef(summary_model)[i, 1],
+      标准误 = coef(summary_model)[i, 2],
+      t值 = coef(summary_model)[i, 3],
+      p值 = coef(summary_model)[i, 4],
+      调整后R方 = summary_model$adj.r.squared,
+      stringsAsFactors = FALSE
+    )
+
+    # 添加到结果数据框
+    results_df <- rbind(results_df, result_row)
+  }
+}
+```
+最终结果  
+<img src=".\figures\sv数目类型与复制时间及染色质可及性的关系.png">
+* 总的sv数目和染色质可及性是正相关的，说明常染色质更容易被STV所影响
+* 多因素矫正后总sv数目和复制时间是负相关的，说明复制时间晚的区域更容易被STV所影响
+* 分sv类型来看，多因素回归下所有sv类型的数目都是和染色质可及性正相关的，而不同sv类型和复制时间的关系则不尽相同，TRA,INV,DEL都是负相关而DUP是正相关。
+* 但这里和复制时间相关的分析实际上不太靠谱，因为从2-2的结果图来看，sv数目和复制时间的关系不是
+线性的，是一个弧线(复制时间很早和很晚的数目高，中间低)
+
+
+
+
+## 不同染色质可及性区域与sv类型的关系(bin大小设置为500kb)
+```
+# 方法1：从UCSC获取GRCh38染色体长度（需要联网）
+# 获取hg38的染色体长度信息
+ucsc_session <- browserSession("UCSC")
+genome(ucsc_session) <- "hg38"
+chrom_info <- getChromInfoFromUCSC("hg38")
+
+# 提取主要染色体（1-22, X, Y, MT）
+main_chroms <- c(paste0("chr", 1:22), "chrX", "chrY")
+chrom_info <- chrom_info[chrom_info$chrom %in% main_chroms, ]
+
+# 设置区间大小为500kb
+bin_size <- 500000
+
+# 生成所有染色体的500kb区间
+generate_bins <- function(chrom, length, bin_size) {
+  # 计算区间数量
+  num_bins <- ceiling(length / bin_size)
+
+  # 生成起始位置
+  starts <- seq(1, by = bin_size, length.out = num_bins)
+
+  # 生成结束位置
+  ends <- pmin(starts + bin_size - 1, length)
+
+  # 创建数据框
+  data.frame(
+    chr = chrom,
+    start = starts,
+    end = ends,
+    bin_id = paste0(chrom, "_", seq_along(starts))
+  )
+}
+
+# 应用函数生成所有区间
+bins_list <- lapply(1:nrow(chrom_info), function(i) {
+  generate_bins(
+    chrom = chrom_info$chrom[i],
+    length = chrom_info$size[i],
+    bin_size = bin_size
+  )
+})
+
+# 合并为一个数据框
+df_hg38_500kb_bins <- do.call(rbind, bins_list)
+
+gr_bins <- GRanges(seqnames = df_hg38_500kb_bins$chr,ranges = IRanges(start = df_hg38_500kb_bins$start+1,end = df_hg38_500kb_bins$end))
+gr_peaks_bed <- GRanges(seqnames = peaks_bed$chr,ranges = IRanges(start = peaks_bed$start+1,end=peaks_bed$end))
+overlaps <- findOverlaps(gr_bins,gr_peaks_bed)
+counts <- tabulate(queryHits(overlaps), nbins = length(gr_bins))
+df_hg38_500kb_bins$atac_peak_n <- counts
+
+#2 把sv信息整合进来
+gr_brks <- GRanges(seqnames = df_brks$CHROM,ranges = IRanges(start = df_brks$POS,width = 1))
+overlaps <- findOverlaps(gr_bins, gr_brks)
+
+# 提取匹配的区间信息
+result_df <- data.frame(
+  query_id = queryHits(overlaps),  # 第一个文件中的区间ID
+  sv_type = df_brks$SV_TYPE[subjectHits(overlaps)]  # 对应的结构变异类型
+)
+
+# 统计每个区间的各类型数量
+counts <- result_df %>%
+  group_by(query_id, sv_type) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    id_cols = query_id,
+    names_from = sv_type,
+    values_from = count,
+    values_fill = 0
+  )
+
+# 计算每个区间的总数量
+counts <- counts %>%
+  mutate(total = rowSums(select(., -query_id)))
+
+# 将结果与原始区间信息合并
+df_hg38_500kb_bins[counts$query_id,c(6:12)] <- counts
+df_hg38_500kb_bins[is.na(df_hg38_500kb_bins)] <- 0
+df_hg38_500kb_bins$query_id <- NULL
+
+df <- df_hg38_500kb_bins
+df_sorted <- df[order(df$atac_peak_n), ]
+
+# 2. 将数据均分为三组
+group_size <- nrow(df_sorted) %/% 3
+df_sorted$accessibility_group <- rep(
+  c("chromatin_accessiblity_low", "chromatin_accessiblity_medium", "chromatin_accessiblity_high"),
+  times = c(group_size, group_size, nrow(df_sorted) - 2 * group_size)
+)
+
+# 3. 计算每种SV类型的总数
+total_translocation <- sum(df_sorted$`Interchromosomal Translocation`)
+total_deletion <- sum(df_sorted$Deletion)
+total_inversion <- sum(df_sorted$Inversion)
+total_duplication <- sum(df_sorted$`Tandem Duplication`)
+
+# 4. 按组统计各类型SV的数量
+group_stats <- aggregate(
+  cbind(`Interchromosomal Translocation`, Deletion, Inversion, `Tandem Duplication`) ~ accessibility_group,
+  data = df_sorted,
+  FUN = sum
+)
+
+# 5. 计算每组中各类型SV占该类型总数的比例
+group_stats$Translocation_ratio <- group_stats$`Interchromosomal Translocation` / total_translocation
+group_stats$Deletion_ratio <- group_stats$Deletion / total_deletion
+group_stats$Inversion_ratio <- group_stats$Inversion / total_inversion
+group_stats$Duplication_ratio <- group_stats$`Tandem Duplication` / total_duplication
+
+# 假设group_stats是前面步骤得到的数据框
+# 首先将数据从宽格式转换为长格式，适合ggplot2绘图
+group_stats_long <- group_stats %>%
+  select(accessibility_group, Translocation_ratio, Deletion_ratio, Inversion_ratio, Duplication_ratio) %>%
+  pivot_longer(
+    cols = -accessibility_group,
+    names_to = "sv_type",
+    values_to = "ratio"
+  ) %>%
+  # 提取SV类型名称（去除"_ratio"后缀）
+  mutate(
+    sv_type = factor(
+      sub("_ratio", "", sv_type),
+      levels = c("Translocation", "Deletion", "Inversion", "Duplication")
+    )
+  )
+group_stats_long$accessibility_group <- factor(group_stats_long$accessibility_group,
+                                               levels = c("chromatin_accessiblity_low",
+                                                          "chromatin_accessiblity_medium",
+                                                          "chromatin_accessiblity_high"))
+# 绘制柱状图
+ggplot(group_stats_long, aes(x = accessibility_group, y = ratio, fill = sv_type)) +
+  geom_col(position = position_dodge(0.9),width=0.8) +
+  # 设置坐标轴标签和标题
+  labs(
+    x = "Chromatin Accessibility",
+    y = "Proportion of SVs",
+    fill = "SV Type",
+    title = ""
+  ) +
+  scale_fill_manual(values = c(
+    "Deletion" = rgb(226, 145, 53, maxColorValue = 255),
+    "Duplication" = rgb(114, 176, 99, maxColorValue = 255),
+    "Inversion" = rgb(113, 154, 172, maxColorValue = 255),
+    "Translocation" = rgb(74, 95, 126, maxColorValue = 255)
+  ))+
+  # 设置百分比刻度
+  scale_y_continuous(
+    limits = c(0, max(group_stats_long$ratio) * 1.1)  # 预留标签空间
+  ) +
+  scale_x_discrete(
+    labels = c("Low", "Medium", "High")
+  )+
+  # 美化主题
+  theme_bw() +
+  theme(
+    axis.title.y = element_text(size = 14),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 14),
+    legend.position = "none"
+  )
+filename <- "~/1000_noncoding/3.SV_analysis/pictures/p2-3_1svount_chromatinaccessibility.pdf"
+ggsave(filename = filename,device = "pdf",width = 8,height = 6)
+```
+<img src=".\figures\p2-3_1svount_chromatinaccessibility.png">
+
+                                        (Result)
+* sv发生频率和染色质的可及性是正相关的，随着染色质可及性的增高，各类型sv的发生频率均升高
