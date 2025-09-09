@@ -5,27 +5,19 @@
 
 
 
-### 代码如下                                       (How)
+## 代码如下                                       (How)
+## loading packages
 
-##loading packages
+```
 library(svpluscnv)
 library(data.table)
+```
 
-##loading files
+###loading files
+```
 load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/config_986.Rdata")
 #cnv
 head(nbl_segdat) #看下要弄成哪样
-##ascat结果
-#lc_segdat <- read.csv("~/1000_noncoding/3.SV_analysis/1.resources/lc_allele_cnv.csv")
-#lc_segdat <- lc_segdat %>%
-#  mutate(Sample=sample_id,
-#         Chromosome=chr,
-#         Start=start,
-#         End=end,
-#         Num_markers=300,
-#         Seg_CN=log2((tumour_major+tumour_minor)/2)) %>%
-#  filter(Sample %in% config_986)
-# lc_cnv <- validate.cnv(lc_segdat)
 ##cnvkit?结果
 lc_segdat <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/fuscc_lc_cnv_seg_20221129_utf8.txt",sep=" ")
 lc_segdat <- lc_segdat %>%
@@ -37,9 +29,6 @@ lc_segdat <- lc_segdat %>%
          Seg_CN=log2((total_cn)/2)) %>%
   filter(Sample %in% config_986)
 lc_cnv <- validate.cnv(lc_segdat)
-
-
-
 
 #sv
 head(nbl_svdat)
@@ -101,32 +90,27 @@ lc_svdat <- lc_svdat %>%
   select(sample,chrom1,pos1,strand1,chrom2,pos2,strand2,svclass)%>%
   filter(sample %in% config_986)
 lc_sv <- validate.svc(lc_svdat)
+```
 
-##开始分析
+## 开始分析
 ### 1 CNV analysis and visualization
 ### CNV frequency plot
 cnv_freq <- cnv.freq(lc_cnv, fc.pct = 0.2, ploidy = TRUE)
-
-### Chromosome arm CNV determination
-###怎么全是del，感觉这个图不太对
-charm.mat <- chr.arm.cnv(lc_cnv, genome.v = "hg38", verbose = FALSE)
-# heatmap plot of chromosome arm level CNV
-require(gplots,quietly = TRUE,warn.conflicts = FALSE)
-heatmap.2(charm.mat[order(rownames(charm.mat))[1:42],],Rowv=NA,dendrogram = "col",trace='none',cexCol=.5, lhei=c(0.25,1), key.title="Copy number",
-          col=colorRampPalette(c("blue","white","red"))(256))
+<img src=".\figures\03SV_QC_cnv_frequency_plot.png">
 
 ### 2 Assessment of chromosomal instability
-
+```
 ###Percent genome change
 # ploidy correction
 pct_change <- pct.genome.changed(lc_cnv, fc.pct = 0.2)
 head(pct_change)
-save(pct_change,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc796_chromosomal_instability")
-
+save(pct_change,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_chromosomal_instability")
+```
 ### 3 Breakpoint burden analysis
-# define breakpoints from svc data
+```
+### define breakpoints from svc data
 svc_breaks  <- svc.breaks(lc_sv)  
-# define breakpoints from cnv data based on certain CNV log-ratio change cutoff
+### define breakpoints from cnv data based on certain CNV log-ratio change cutoff
 cnv_breaks  <- cnv.breaks(lc_cnv1,fc.pct = 0.2,verbose=FALSE)  
 
 # scatter plot comparing cnv and svc breakpoint burden and percent genome changed, for a set of common samples
@@ -140,18 +124,24 @@ plot(dat1, xlab="log2(1+SV break count)", ylab="log2(1+CNV break count)")
 legend("bottomright",paste("Spearman's cor=",sprintf("%.2f",cor(dat1,method="spearman")[1,2]), sep=""))
 plot(dat2, xlab="percentage genome changed", ylab="log2(1+CNV break count)")
 legend("bottomright",paste("Spearman's cor=",sprintf("%.2f",cor(dat2,method="spearman")[1,2]), sep=""))
-
-### SVC corrected breakpoint burden-没啥用
-par(mar=c(1,5,1,1))
-svc.brk.iqm <- brk.burden.iqm(svc_breaks)
+```
+<img src=".\figures\03SVQC_cnv_sv数量一致性.png">
+* SV和CNV断点的一致性还是相当不错的
 
 ### Co-localization of breakpoints
+```
 common.breaks <- match.breaks(cnv_breaks, svc_breaks,
                               maxgap=100000,
                               verbose=FALSE,
                               plot = TRUE)
+```
+<img src=".\figures\03SV_colocalization_of_brks.png">
+* 平均下来39.6%的sv断点有cnv断点的支持，20.4%的cnv断点有sv
+断点的支持。将cnv作为参考的话，说明sv calling的敏感性比较低，特异性比较高
 
-# Identification of shattered regions
+
+### Identification of shattered regions
+```
 # It is important to make sure the input data.frame has no factors
 library(taRifx)
 lc_segdat <- remove.factors(lc_segdat)
@@ -164,25 +154,132 @@ lc_svc <- validate.svc(lc_svdat)
 ###Chromosome shattering combining SV and CNV
 shatt_lung <- shattered.regions(lc_cnv, lc_svc, fc.pct = 0.1, verbose=FALSE)
 shatt_lung
-
+```
+### 结果
 #An object of class chromo.regs from svpluscnv containing the following stats:
 #Number of samples tested= 894
 #Number of samples with high-breakpoint density bins= 470
 #Number of samples with high-confidence shattered regions= 454
 #Number of samples with low-confidence shattered regions= 66
 
-# plotting functions are available for whole genome and chromosomes with shattered regions (both combined CNV and SV and CNV only)
-par(mfrow=c(1,2))
-circ.wg.plot(lc_cnv,lc_sv,sample.id = "1621LC")
-circ.chromo.plot(shatt_lung,sample.id = "1621LC")
-
+### 寻找高频碎裂区域
+```
 set.seed(12345678)
 par(mar=c(5,5,5,5))
 null.test <- freq.p.test(shatt_lung@high.density.regions.hc,
                          method="fdr", p.cut = 0.05)
+dev.off()
+```
+<img src=".\figures\03SV_碎裂区域密度图.png">
+```
+
+```
 par(mar=c(4,4,4,4))
 shattered.map.plot(shatt_lung, freq.cut = null.test@freq.cut)
+```
 
-# obtain genomic bins within above the FDR cutoff
+
+
+### obtain genomic bins within above the FDR cutoff
+```
 hotspots <- hot.spot.samples(shatt_lung, freq.cut=null.test@freq.cut)
 hotspots$peakRegionsSamples
+```
+
+$`chr5 36011882 46011882`
+ [1] "1694LC" "1858LC" "2008LC" "2063LC" "2114LC" "2550LC"
+ [7] "2721LC" "2770LC" "2835LC" "3318LC" "3535LC" "3689LC"
+[13] "3835LC" "3858LC" "4046LC" "4310LC" "4558LC" "4603LC"
+[19] "4858LC" "4968LC" "5005LC" "5082LC" "5198LC" "5249LC"
+[25] "5261LC" "5279LC" "5351LC" "5360LC" "5410LC" "5470LC"
+[31] "5472LC" "5520LC" "5588LC" "5619LC" "5625LC" "5708LC"
+[37] "5750LC" "5771LC" "5808LC" "6307LC" "6315LC" "6462LC"
+[43] "6539LC" "6585LC" "6701LC" "6759LC" "6791LC" "6828LC"
+[49] "6832LC" "6887LC" "6897LC" "6898LC" "6905LC" "6910LC"
+[55] "6912LC" "7012LC" "7063LC"
+
+$`chr5 172011882 182011882`
+ [1] "1686LC" "1731LC" "1751LC" "1977LC" "2302LC" "2485LC"
+ [7] "3806LC" "3849LC" "3887LC" "4502LC" "4666LC" "4971LC"
+[13] "5588LC" "5927LC" "6013LC" "6014LC" "6446LC" "6508LC"
+[19] "6670LC" "7012LC"
+
+$`chr6 40100116 50100116`
+ [1] "1708LC" "1717LC" "1839LC" "2476LC" "2642LC" "3048LC"
+ [7] "4407LC" "4596LC" "4905LC" "5016LC" "5296LC" "5363LC"
+[13] "5593LC" "5920LC" "6549LC" "6655LC"
+
+$`chr7 30020608 40020608`
+ [1] "1639LC" "1760LC" "3613LC" "5198LC" "5331LC" "5373LC"
+ [7] "5472LC" "5599LC" "5689LC" "5918LC" "5979LC" "6655LC"
+[13] "6657LC" "7012LC"
+
+$`chr7 52020608 62020608`
+ [1] "1643LC" "1713LC" "2050LC" "2293LC" "2485LC" "2642LC"
+ [7] "2788LC" "2902LC" "3376LC" "3985LC" "4558LC" "4651LC"
+[13] "4858LC" "4867LC" "5098LC" "5198LC" "5241LC" "5243LC"
+[19] "5373LC" "5595LC" "5618LC" "5705LC" "5897LC" "6127LC"
+[25] "7057LC"
+
+$`chr8 34061774 44061774`
+ [1] "1708LC" "1739LC" "1792LC" "1913LC" "2476LC" "3818LC"
+ [7] "4284LC" "4923LC" "5036LC" "5059LC" "5279LC" "5599LC"
+[13] "5669LC" "6286LC" "6907LC"
+
+$`chr8 136061774 146061774`
+ [1] "1756LC" "1875LC" "1970LC" "2008LC" "2164LC" "2293LC"
+ [7] "2476LC" "2719LC" "3298LC" "3318LC" "3517LC" "3767LC"
+[13] "3823LC" "3845LC" "4131LC" "4158LC" "4180LC" "4276LC"
+[19] "4398LC" "4666LC" "4821LC" "4923LC" "5160LC" "5228LC"
+[25] "5273LC" "5279LC" "5351LC" "5385LC" "5390LC" "5406LC"
+[31] "5661LC" "5780LC" "5846LC" "5901LC" "5961LC" "6096LC"
+[37] "6115LC" "6307LC" "6315LC" "6517LC" "6540LC" "6600LC"
+[43] "6629LC" "6634LC" "6780LC" "6832LC" "6905LC"
+
+$`chr12 24011065 34011065`
+ [1] "1717LC" "1739LC" "1866LC" "1875LC" "2050LC" "2807LC"
+ [7] "4390LC" "4856LC" "4885LC" "5059LC" "5070LC" "5896LC"
+[13] "6241LC" "6607LC" "6623LC"
+
+$`chr12 76011065 86011065`
+ [1] "1683LC" "1717LC" "1739LC" "1866LC" "1913LC" "2034LC"
+ [7] "2709LC" "2712LC" "2721LC" "2779LC" "2807LC" "2888LC"
+[13] "2902LC" "3012LC" "3300LC" "3613LC" "3835LC" "3920LC"
+[19] "4074LC" "4284LC" "4295LC" "4317LC" "4318LC" "4462LC"
+[25] "4612LC" "4699LC" "4856LC" "4858LC" "4866LC" "4885LC"
+[31] "5064LC" "5077LC" "5160LC" "5181LC" "5259LC" "5279LC"
+[37] "5283LC" "5406LC" "5421LC" "5470LC" "5599LC" "5619LC"
+[43] "5620LC" "5753LC" "5920LC" "5954LC" "6013LC" "6014LC"
+[49] "6107LC" "6134LC" "6185LC" "6540LC" "6607LC" "6657LC"
+[55] "6700LC" "6722LC" "6791LC" "6806LC" "6842LC" "6861LC"
+[61] "6910LC" "7063LC"
+
+$`chr14 36223583 46223583`
+ [1] "1621LC" "1711LC" "1713LC" "1719LC" "1800LC" "1954LC"
+ [7] "1990LC" "2008LC" "2050LC" "2067LC" "2117LC" "2166LC"
+[13] "2214LC" "3318LC" "3535LC" "3632LC" "3973LC" "4544LC"
+[19] "4899LC" "5021LC" "5064LC" "5082LC" "5262LC" "5317LC"
+[25] "5354LC" "5540LC" "5595LC" "5610LC" "5897LC" "5962LC"
+[31] "6307LC" "6593LC" "6657LC" "6690LC" "6702LC" "6793LC"
+[37] "6799LC" "6832LC" "6898LC"
+
+$`chr16 52010291 62010291`
+ [1] "2204LC" "2811LC" "3300LC" "3845LC" "3869LC" "4407LC"
+ [7] "5002LC" "5373LC" "5528LC" "5672LC" "5800LC" "5917LC"
+[13] "6115LC" "6829LC"
+
+$`chr19 32157892 42157892`
+ [1] "1792LC" "2117LC" "2378LC" "2811LC" "2975LC" "3522LC"
+ [7] "3663LC" "4060LC" "4284LC" "4558LC" "4866LC" "4902LC"
+[13] "5249LC" "5380LC" "5595LC" "5612LC" "5783LC" "6015LC"
+[19] "6140LC" "6549LC" "6790LC" "6806LC" "7012LC"
+
+$`chr20 56080457 66080457`
+ [1] "1839LC" "1977LC" "2076LC" "2169LC" "2564LC" "2678LC"
+ [7] "2770LC" "2779LC" "2975LC" "3277LC" "3509LC" "3522LC"
+[13] "3767LC" "3769LC" "3806LC" "3849LC" "4046LC" "4060LC"
+[19] "4192LC" "4210LC" "4294LC" "4458LC" "4877LC" "4921LC"
+[25] "5023LC" "5259LC" "5409LC" "5470LC" "5520LC" "5545LC"
+[31] "5620LC" "5800LC" "5924LC" "5948LC" "6103LC" "6205LC"
+[37] "6462LC" "6491LC" "6517LC" "6600LC" "6607LC" "6657LC"
+[43] "6798LC" "6898LC" "7034LC" "7045LC"
