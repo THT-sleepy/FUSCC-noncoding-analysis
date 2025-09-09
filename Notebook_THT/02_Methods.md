@@ -15,3 +15,6 @@ Written summary of methods performed in this repo. This is the methods write up 
 A549 复制时间测序fastq文件  
 Early S Stage:https://www.encodeproject.org/files/ENCFF435OVV/
 Late S Stage:https://www.encodeproject.org/files/ENCFF029RFD/
+
+A549 染色质可及性文件 bed(narrow peak)
+https://www.encodeproject.org/files/ENCFF735UWS/@@download/ENCFF735UWS.bed.gz

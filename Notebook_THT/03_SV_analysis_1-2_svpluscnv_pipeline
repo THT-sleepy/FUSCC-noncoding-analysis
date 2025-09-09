@@ -1,0 +1,188 @@
+# 这个脚本主要是把svpluscnv的结果给跑了一遍，其中比较重要的是cnv和sv断点的一致性   (What)
+* Sep 9, 2025                                  (When)
+* biotrainee ~/1000_noncoding/3.SV_analysis/2.analysis (Where)
+* 通过cnv和sv的一致性可以大致判断sv calling的敏感性和特异性                                     (Why)
+
+
+
+### 代码如下                                       (How)
+
+##loading packages
+library(svpluscnv)
+library(data.table)
+
+##loading files
+load("~/1000_noncoding/3.SV_analysis/2.analysis/RData/config_986.Rdata")
+#cnv
+head(nbl_segdat) #看下要弄成哪样
+##ascat结果
+#lc_segdat <- read.csv("~/1000_noncoding/3.SV_analysis/1.resources/lc_allele_cnv.csv")
+#lc_segdat <- lc_segdat %>%
+#  mutate(Sample=sample_id,
+#         Chromosome=chr,
+#         Start=start,
+#         End=end,
+#         Num_markers=300,
+#         Seg_CN=log2((tumour_major+tumour_minor)/2)) %>%
+#  filter(Sample %in% config_986)
+# lc_cnv <- validate.cnv(lc_segdat)
+##cnvkit?结果
+lc_segdat <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/fuscc_lc_cnv_seg_20221129_utf8.txt",sep=" ")
+lc_segdat <- lc_segdat %>%
+  mutate(Sample=sample_id,
+         Chromosome=chr,
+         Start=start,
+         End=end,
+         Num_markers=number_markers,
+         Seg_CN=log2((total_cn)/2)) %>%
+  filter(Sample %in% config_986)
+lc_cnv <- validate.cnv(lc_segdat)
+
+
+
+
+#sv
+head(nbl_svdat)
+
+lc_svdat <- read.delim("~/1000_noncoding/3.SV_analysis/1.resources/lc986.mantasv.bedpe")
+colnames(lc_svdat)[1] <- "CHROM_A"
+###把bedpe格式中用BND记录的TRA改成用junction记录，也就是只保留每个junction的两个断点的一个
+df <- lc_svdat
+
+# 假设原始数据框为df，转换为data.table以提高处理速度
+setDT(df)
+
+# 筛选出TYPE为BND的行，并创建用于匹配的键
+bnd_dt <- df[TYPE == "BND", ]
+
+# 创建正向和反向匹配的标识列
+bnd_dt[, `:=`(
+  forward_key = paste(CHROM_A,START_A, END_A, CHROM_B, START_B, END_B, SAMPLE, sep = "_"),
+  reverse_key = paste(CHROM_B, START_B, END_B, CHROM_A, START_A, END_A, SAMPLE, sep = "_")
+)]
+
+# 确保每行只被比较一次（取forward_key < reverse_key的行作为保留基准）
+bnd_dt[, keep := forward_key < reverse_key]
+
+# 找出需要保留的行索引
+keep_rows <- bnd_dt[keep == TRUE, which = TRUE]
+
+# 对于forward_key == reverse_key的特殊情况（自身反向匹配），只保留一行
+self_match <- bnd_dt[forward_key == reverse_key, ]
+if (nrow(self_match) > 0) {
+  self_keep <- !duplicated(self_match$forward_key)
+  keep_rows <- c(keep_rows, which(bnd_dt$forward_key %in% self_match$forward_key[self_keep]))
+}
+
+# 提取需要保留的BND行
+bnd_kept <- bnd_dt[unique(keep_rows), ]
+
+# 合并非BND行和保留的BND行，得到最终结果
+result_dt <- rbind(
+  df[TYPE != "BND", ],
+  bnd_kept[, !c("forward_key", "reverse_key", "keep")]  # 移除临时列
+)
+
+# 转换回data.frame（如果需要）
+result_df <- as.data.frame(result_dt)
+lc986_bedpe_bnd_changedto_tra <- result_df
+save(lc986_bedpe_bnd_changedto_tra,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc986_bedpe_bnd_changedto_tra.RData")
+
+lc_svdat <- result_df
+lc_svdat <- lc_svdat %>%
+  mutate(sample=SAMPLE,
+         chrom1=CHROM_A,
+         pos1=START_A,
+         strand1="+",
+         chrom2=CHROM_B,
+         pos2=START_B,
+         strand2="+",
+         svclass=ifelse(TYPE=="BND","TRA",TYPE))%>%
+  select(sample,chrom1,pos1,strand1,chrom2,pos2,strand2,svclass)%>%
+  filter(sample %in% config_986)
+lc_sv <- validate.svc(lc_svdat)
+
+##开始分析
+### 1 CNV analysis and visualization
+### CNV frequency plot
+cnv_freq <- cnv.freq(lc_cnv, fc.pct = 0.2, ploidy = TRUE)
+
+### Chromosome arm CNV determination
+###怎么全是del，感觉这个图不太对
+charm.mat <- chr.arm.cnv(lc_cnv, genome.v = "hg38", verbose = FALSE)
+# heatmap plot of chromosome arm level CNV
+require(gplots,quietly = TRUE,warn.conflicts = FALSE)
+heatmap.2(charm.mat[order(rownames(charm.mat))[1:42],],Rowv=NA,dendrogram = "col",trace='none',cexCol=.5, lhei=c(0.25,1), key.title="Copy number",
+          col=colorRampPalette(c("blue","white","red"))(256))
+
+### 2 Assessment of chromosomal instability
+
+###Percent genome change
+# ploidy correction
+pct_change <- pct.genome.changed(lc_cnv, fc.pct = 0.2)
+head(pct_change)
+save(pct_change,file = "~/1000_noncoding/3.SV_analysis/2.analysis/RData/lc796_chromosomal_instability")
+
+### 3 Breakpoint burden analysis
+# define breakpoints from svc data
+svc_breaks  <- svc.breaks(lc_sv)  
+# define breakpoints from cnv data based on certain CNV log-ratio change cutoff
+cnv_breaks  <- cnv.breaks(lc_cnv1,fc.pct = 0.2,verbose=FALSE)  
+
+# scatter plot comparing cnv and svc breakpoint burden and percent genome changed, for a set of common samples
+common_samples <- intersect(names(svc_breaks@burden),names(cnv_breaks@burden))
+dat1 <- log2(1+cbind(svc_breaks@burden[common_samples],
+                     cnv_breaks@burden[common_samples]))
+dat2 <- log2(1+cbind(pct_change,
+                     cnv_breaks@burden[names(pct_change)]))
+par(mfrow=c(1,2))
+plot(dat1, xlab="log2(1+SV break count)", ylab="log2(1+CNV break count)")
+legend("bottomright",paste("Spearman's cor=",sprintf("%.2f",cor(dat1,method="spearman")[1,2]), sep=""))
+plot(dat2, xlab="percentage genome changed", ylab="log2(1+CNV break count)")
+legend("bottomright",paste("Spearman's cor=",sprintf("%.2f",cor(dat2,method="spearman")[1,2]), sep=""))
+
+### SVC corrected breakpoint burden-没啥用
+par(mar=c(1,5,1,1))
+svc.brk.iqm <- brk.burden.iqm(svc_breaks)
+
+### Co-localization of breakpoints
+common.breaks <- match.breaks(cnv_breaks, svc_breaks,
+                              maxgap=100000,
+                              verbose=FALSE,
+                              plot = TRUE)
+
+# Identification of shattered regions
+# It is important to make sure the input data.frame has no factors
+library(taRifx)
+lc_segdat <- remove.factors(lc_segdat)
+lc_svdat <- remove.factors(lc_svdat)
+lc_cnv <- validate.cnv(lc_segdat)
+# remove likely artifacts from segmentation data and fill gaps in the segmentation data (optional)
+cnv_clean <- clean.cnv.artifact(lc_cnv, verbose=FALSE,n.reps = 4,fill.gaps = TRUE)  
+lc_svc <- validate.svc(lc_svdat)
+
+###Chromosome shattering combining SV and CNV
+shatt_lung <- shattered.regions(lc_cnv, lc_svc, fc.pct = 0.1, verbose=FALSE)
+shatt_lung
+
+#An object of class chromo.regs from svpluscnv containing the following stats:
+#Number of samples tested= 894
+#Number of samples with high-breakpoint density bins= 470
+#Number of samples with high-confidence shattered regions= 454
+#Number of samples with low-confidence shattered regions= 66
+
+# plotting functions are available for whole genome and chromosomes with shattered regions (both combined CNV and SV and CNV only)
+par(mfrow=c(1,2))
+circ.wg.plot(lc_cnv,lc_sv,sample.id = "1621LC")
+circ.chromo.plot(shatt_lung,sample.id = "1621LC")
+
+set.seed(12345678)
+par(mar=c(5,5,5,5))
+null.test <- freq.p.test(shatt_lung@high.density.regions.hc,
+                         method="fdr", p.cut = 0.05)
+par(mar=c(4,4,4,4))
+shattered.map.plot(shatt_lung, freq.cut = null.test@freq.cut)
+
+# obtain genomic bins within above the FDR cutoff
+hotspots <- hot.spot.samples(shatt_lung, freq.cut=null.test@freq.cut)
+hotspots$peakRegionsSamples
