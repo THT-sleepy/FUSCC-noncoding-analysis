@@ -185,7 +185,7 @@ shattered.map.plot(shatt_lung, freq.cut = null.test@freq.cut)
 hotspots <- hot.spot.samples(shatt_lung, freq.cut=null.test@freq.cut)
 hotspots$peakRegionsSamples
 ```
-
+"""
 $`chr5 36011882 46011882`
  [1] "1694LC" "1858LC" "2008LC" "2063LC" "2114LC" "2550LC"
  [7] "2721LC" "2770LC" "2835LC" "3318LC" "3535LC" "3689LC"
@@ -283,3 +283,4 @@ $`chr20 56080457 66080457`
 [31] "5620LC" "5800LC" "5924LC" "5948LC" "6103LC" "6205LC"
 [37] "6462LC" "6491LC" "6517LC" "6600LC" "6607LC" "6657LC"
 [43] "6798LC" "6898LC" "7034LC" "7045LC"
+"""
