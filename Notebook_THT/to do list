@@ -16,4 +16,5 @@
 ### 11 kataegis
 ### 12 chromothripsis
 ### 13 chromoplexy
-### 14 待补充q<0.1基因的通路富集分析
+### 14 待补充q<0.1基因的通路富集分析(重新使用-1,0,1作为cn normal进行分析)
+### 15 计算gene的绝对拷贝数
