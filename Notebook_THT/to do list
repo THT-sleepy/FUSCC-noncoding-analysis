@@ -10,9 +10,13 @@
 ### 5 Rheinbay部分需要对sv进行更详细的细分(Fusion-like,fragile-like,SCNA-like)
 ### 6 sv signature分析
 ### 7 特殊sv事件如EH，结构破坏(PD-L1 3'UTR),ecDNA的形成(可行性待查)
-### 8 表达受SV显著影响基因集的GSEA分析-done
+### 8 表达受SV显著影响基因集的GSEA分析
 ### 9 SRJ分析结果整理一下
 ### 10 可探索的分析 扩增子与SE的重合区域
 ### 11 kataegis
 ### 12 chromothripsis
 ### 13 chromoplexy
+### 14 按照li yilong的方法对sv进行分类 和6一起做
+
+##先做5,9,8,10-SRB,SRJ以及断点对基因表达的影响
+##然后做14,11,12,13,7-复杂结构变异在LUAD中的分布情况及其对癌基因的影响
