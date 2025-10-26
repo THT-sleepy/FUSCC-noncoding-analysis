@@ -18,3 +18,7 @@ Late S Stage:https://www.encodeproject.org/files/ENCFF029RFD/
 
 A549 染色质可及性文件 bed(narrow peak)
 https://www.encodeproject.org/files/ENCFF735UWS/@@download/ENCFF735UWS.bed.gz
+
+##拷贝数变异分析
+cnvkit(默认参数，版本不详)
+gistic2.0(v2.0.23)
